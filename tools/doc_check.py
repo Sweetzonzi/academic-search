@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-r"""文档检查器 —— academic-search 文档的自包含性与引用完整性。
+r"""文档检查器 —— academic-search 文档的引用完整性与自包含性。
 
 对应 AGENTS.md 第 4 节。用法（在 academic-search/ 下）：
 
@@ -9,14 +9,15 @@ r"""文档检查器 —— academic-search 文档的自包含性与引用完整�
     & 'D:\anaconda3\python.exe' tools\doc_check.py --refs   # 只查引用
     & 'D:\anaconda3\python.exe' tools\doc_check.py --self   # 只查自包含性
 
-**能证明什么**：链接是否解析、`NN §x.y` 引用的小节是否存在、缺陷词汇出现在哪。
+体系（docs/00-文档体系.md）：
+  - 每篇文档在 front-matter 里声明 doc-id 与 kind；
+  - 跨文档引用写成 「DOCID §x.y」，或裸的 ADR-NNNN / EX-YYYYMMDD-...；
+  - 追加式记录（kind = decision / experiment）允许历史措辞，
+    自包含性检查只覆盖规范与过程类。
 
-**证明不了什么**（必须人读）：
-  - 语义漂移 —— 小节存在，但内容已不是当初引用的那个；
-  - 缺陷词汇 vs. 定义 —— 见下方 SELF_PATTERNS 的说明；
-  - 结论是否有实测支撑。
-
-退出码：有硬错误（断链 / 悬空 § 引用）时 1，否则 0。自包含性命中只是**复核队列**，不影响退出码。
+能证明什么：链接是否解析、DOCID §x.y 是否指向存在的小节、缺陷词汇出现在哪。
+证明不了什么（必须人读）：语义漂移、框架是否仍在、结论是否有实测支撑。
+退出码：有硬错误（断链 / 悬空引用）时 1，否则 0。
 """
 from __future__ import annotations
 
@@ -27,14 +28,10 @@ import sys
 import urllib.parse
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent          # academic-search/
-DOCS = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("0*.md")) + [
-    ROOT / "docs" / "参考资料-公开API事实.md"
-]
-# docs/archive/ 故意排除：它保留的是当时的样子（AGENTS.md 第 2 节）
+DOCS = ROOT / "docs"
+ARCHIVE = DOCS / "archive"
 
 # 扫“被删除的上一版”留下的措辞。刻意宁可多报 —— 需要人判定。
-# 例：本表报出的「本版」多半是「文本版」的一部分；「推翻」在
-# “否决某方案”的语境里是合法的。工具只负责把候选行摆到人面前。
 SELF_PATTERNS: list[tuple[str, str]] = [
     (r"(?<!文)本版|上一版|前一版|前版|旧版|早期版本", "版本间指代"),
     (r"原\s*[DQ]\d+|原方案|原设计", "提名了可能已不存在的编号/方案"),
@@ -46,20 +43,58 @@ SELF_PATTERNS: list[tuple[str, str]] = [
 ]
 
 # 这些是“应当保留的历史”，出现缺陷词也合法（AGENTS.md 第 2 节）
-LEGIT_CONTEXT = re.compile(r"否决|风险登记册|迁移|备选|踩过的坑|判据")
+LEGIT_CONTEXT = re.compile(r"否决|风险登记册|迁移|备选|踩过的坑|判据|记录类")
+
+# 只有规范 / 过程类做自包含性检查；决策与实验是追加式记录，允许历史措辞。
+C_KINDS = {"normative", "runbook"}
+
+FM = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
+REF = re.compile(r"(?<![A-Za-z0-9-])([A-Za-z][A-Za-z0-9._-]*)\s*§\s*(\d+(?:\.\d+)*)")
+BARE = re.compile(r"(?<![A-Za-z0-9-])(ADR-\d{4}|EX-\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+)(?![A-Za-z0-9-])")
 
 
 def markdown_files() -> list[pathlib.Path]:
-    return [d for d in DOCS if d.exists()]
+    out: list[pathlib.Path] = []
+    for p in sorted(DOCS.rglob("*.md")):
+        if ARCHIVE in p.parents:
+            continue
+        out.append(p)
+    for name in ("AGENTS.md", "README.md"):
+        p = ROOT / name
+        if p.exists():
+            out.append(p)
+    return out
 
 
-def check_links() -> int:
-    """相对链接是否解析。返回错误数。"""
+def load(p: pathlib.Path) -> tuple[str, dict[str, str]]:
+    text = p.read_text(encoding="utf-8")
+    meta: dict[str, str] = {}
+    m = FM.match(text)
+    if m:
+        for line in m.group(1).split("\n"):
+            if ":" in line:
+                k, v = line.split(":", 1)
+                meta[k.strip()] = v.strip().strip('"').strip("'")
+    return text, meta
+
+
+def section_ids(text: str) -> set[str]:
+    return set(re.findall(r"^#{2,4}\s+(\d+(?:\.\d+)*)\.?\s", text, re.M))
+
+
+def rel(p: pathlib.Path) -> str:
+    try:
+        return str(p.relative_to(ROOT)).replace("\\", "/")
+    except ValueError:
+        return str(p)
+
+
+def check_links(files: list[pathlib.Path]) -> int:
     print("=" * 88)
     print("A. 相对链接")
     print("=" * 88)
     bad = 0
-    for doc in markdown_files():
+    for doc in files:
         for i, line in enumerate(doc.read_text(encoding="utf-8").split("\n"), 1):
             for m in re.finditer(r"!?\[[^\]]*\]\(([^)]+)\)", line):
                 target = m.group(1)
@@ -69,64 +104,70 @@ def check_links() -> int:
                 if not path_part or path_part.startswith("#"):
                     continue
                 if not (doc.parent / path_part).resolve().exists():
-                    # 正文里展示的产物片段（如 paper.md 里的 figures/x.png）不是仓库链接
                     if path_part.startswith("figures/"):
-                        print(f"  ~ {doc.name}:{i}  {target}  （正文示例，非仓库链接）")
+                        print(f"  ~ {rel(doc)}:{i}  {target}  （正文示例，非仓库链接）")
                         continue
                     bad += 1
-                    print(f"  ✗ 断链 {doc.name}:{i}  {target}")
+                    print(f"  ✗ 断链 {rel(doc)}:{i}  {target}")
     print(f"  → 断链 {bad} 处")
     return bad
 
 
-def check_sections() -> int:
-    """`NN §x.y` 引用的小节是否存在于目标文档。返回错误数。"""
+def check_sections(files: list[pathlib.Path]) -> int:
     print()
     print("=" * 88)
-    print("B. 跨文档 § 引用")
+    print("B. 跨文档引用（DOCID §x.y 与 ADR / EX 编号）")
     print("=" * 88)
 
-    by_num: dict[str, tuple[pathlib.Path, set[str]]] = {}
-    for d in markdown_files():
-        m = re.match(r"(\d\d)-", d.name)
-        if m:
-            ids = set(re.findall(r"^#{2,4}\s+(\d+(?:\.\d+)*)\.?\s", d.read_text(encoding="utf-8"), re.M))
-            by_num[m.group(1)] = (d, ids)
+    by_id: dict[str, tuple[pathlib.Path, set[str]]] = {}
+    for d in files:
+        _text, meta = load(d)
+        did = meta.get("doc-id")
+        if did:
+            by_id[did] = (d, section_ids(_text))
 
     bad = 0
     checked = 0
-    for doc in markdown_files():
-        for i, line in enumerate(doc.read_text(encoding="utf-8").split("\n"), 1):
-            for m in re.finditer(r"(?<![\dA-Za-z])(\d{2})[\s、]{0,2}§\s*(\d+(?:\.\d+)*)", line):
-                dnum, sec = m.group(1), m.group(2)
+    for doc in files:
+        text = doc.read_text(encoding="utf-8")
+        for i, line in enumerate(text.split("\n"), 1):
+            for m in REF.finditer(line):
+                did, sec = m.group(1), m.group(2)
                 checked += 1
-                if dnum not in by_num:
+                if did not in by_id:
                     bad += 1
-                    print(f"  ✗ {doc.name}:{i}  «{m.group(0)}»  文档号 {dnum} 不存在")
-                elif sec not in by_num[dnum][1]:
+                    print(f"  ✗ {rel(doc)}:{i}  «{m.group(0)}»  文档 ID {did} 不存在")
+                elif sec not in by_id[did][1]:
                     bad += 1
-                    print(f"  ✗ {doc.name}:{i}  «{m.group(0)}»  {by_num[dnum][0].name} 里没有 §{sec}")
+                    print(f"  ✗ {rel(doc)}:{i}  «{m.group(0)}»  {rel(by_id[did][0])} 里没有 §{sec}")
+            for m in BARE.finditer(line):
+                checked += 1
+                if m.group(1) not in by_id:
+                    bad += 1
+                    print(f"  ✗ {rel(doc)}:{i}  «{m.group(1)}»  没有对应的决策/实验文档")
     print(f"  → 检查 {checked} 条，悬空 {bad} 条")
     return bad
 
 
-def check_selfcontainment() -> int:
-    """缺陷词汇复核队列。返回命中数（非错误）。"""
+def check_selfcontainment(files: list[pathlib.Path]) -> int:
     print()
     print("=" * 88)
-    print("C. 自包含性候选（缺陷词汇命中；需逐条人读判定）")
+    print("C. 自包含性候选（只查规范/过程类；命中需逐条人读）")
     print("=" * 88)
     hits = 0
-    for doc in markdown_files():
+    for doc in files:
+        text, meta = load(doc)
+        if meta.get("kind") not in C_KINDS:
+            continue
         rows = []
-        for i, line in enumerate(doc.read_text(encoding="utf-8").split("\n"), 1):
+        for i, line in enumerate(text.split("\n"), 1):
             for pat, why in SELF_PATTERNS:
                 for m in re.finditer(pat, line):
                     s, e = max(0, m.start() - 45), min(len(line), m.end() + 45)
                     legit = "合法历史?" if LEGIT_CONTEXT.search(line) else ""
                     rows.append((i, m.group(0), why, line[s:e].strip(), legit))
         if rows:
-            print(f"\n  {doc.name}")
+            print(f"\n  {rel(doc)}")
             for i, hit, why, ctx, legit in rows:
                 hits += 1
                 print(f"    [{i:>4}] «{hit}» ({why}) {legit}")
@@ -137,26 +178,27 @@ def check_selfcontainment() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="academic-search 文档检查器")
-    ap.add_argument("--refs", action="store_true", help="只查链接与 § 引用")
+    ap.add_argument("--refs", action="store_true", help="只查链接与引用")
     ap.add_argument("--self", dest="selfonly", action="store_true", help="只查自包含性")
     args = ap.parse_args()
 
-    if not markdown_files():
-        print(f"找不到文档；ROOT 解析为 {ROOT}", file=sys.stderr)
+    files = markdown_files()
+    if not files:
+        print(f"找不到文档；DOCS 解析为 {DOCS}", file=sys.stderr)
         return 2
 
     errors = 0
     if not args.selfonly:
-        errors += check_links()
-        errors += check_sections()
+        errors += check_links(files)
+        errors += check_sections(files)
     if not args.refs:
-        check_selfcontainment()
+        check_selfcontainment(files)
 
     print()
     if errors:
         print(f"✗ 硬错误 {errors} 处（断链 / 悬空引用）")
     else:
-        print("✓ 链接与 § 引用全部解析")
+        print("✓ 链接与引用全部解析")
     return 1 if errors else 0
 
 

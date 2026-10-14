@@ -1,3 +1,10 @@
+---
+doc-id: REF-API
+kind: reference
+measured: 2026-10-14
+title: 公开学术数据库 API 事实核查报告
+---
+
 # 公开学术数据库 API 事实核查报告（2026-10-14 实查）
 
 ## A. OpenAlex（主力元数据源）
@@ -43,7 +50,7 @@
 
 **额度模型（2026-02 起）**：polite pool 已废除、`mailto` 被忽略，改为 API key + 按次计费：**有 key 免费 $1/天**（00:00 UTC 重置）；无 key **$0.10/天且同一出口 IP 共享**；`filter` = $0.0001/次、`search=` = $0.001/次；**单实体 GET 免费，所有 4xx/5xx 免费**；速率上限 无 key 10 / 免费 key 30 / 年费档 50 req/s（[pricing](https://help.openalex.org/access/pricing/)、[authentication](https://help.openalex.org/api/authentication/)）。
 
-**arXiv → OpenAlex 的两条桥（本机实测）**：① **可构造的 DataCite DOI** `10.48550/arXiv.<arXiv-id>` —— `filter=doi:10.48550/arXiv.<id>` 直接命中（$0.0001）；该 DOI 在 DataCite 里从 2006 年（含 `math/0601001` 老式 id）到当天新论文都存在。**但 02 §3.5 已记录过一次 DOI→错误记录的错配**，命中后必须校验标题/年份。② **Semantic Scholar** `GET /graph/v1/paper/arXiv:<id>` 无 key 返回 `externalIds = {MAG, ArXiv, DBLP, DOI, CorpusId}` —— **唯一显式给出 arXiv 映射的地方**，免费但共享池极易 429。注：Crossref **不认识**这些 DataCite DOI（实测 404）；arXiv API 自带的 `<arxiv:doi>` 是**作者手填**的（实测 3 篇中仅 1 篇有）。
+**arXiv → OpenAlex 的两条桥（本机实测）**：① **可构造的 DataCite DOI** `10.48550/arXiv.<arXiv-id>` —— `filter=doi:10.48550/arXiv.<id>` 直接命中（$0.0001）；该 DOI 在 DataCite 里从 2006 年（含 `math/0601001` 老式 id）到当天新论文都存在。**但 REF-SOURCES §5 已记录过一次 DOI→错误记录的错配**，命中后必须校验标题/年份。② **Semantic Scholar** `GET /graph/v1/paper/arXiv:<id>` 无 key 返回 `externalIds = {MAG, ArXiv, DBLP, DOI, CorpusId}` —— **唯一显式给出 arXiv 映射的地方**，免费但共享池极易 429。注：Crossref **不认识**这些 DataCite DOI（实测 404）；arXiv API 自带的 `<arxiv:doi>` 是**作者手填**的（实测 3 篇中仅 1 篇有）。
 
 **分页**：`per_page` 1–100（默认 25，旧 `per_page=200` 已弃用）；`page × per_page ≤ 10000`；超过则用 cursor：`cursor=*` → 读 `meta.next_cursor` → 传入下一次请求，直到 `next_cursor` 为 null。文档同时警告**不要用 cursor 拉全库**（需数天且加重服务器负担），全量应使用快照（[paging](https://help.openalex.org/api/paging/)）。
 
