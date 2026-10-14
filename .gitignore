@@ -1,0 +1,14 @@
+# 派生数据与本地状态：删掉可重建（见 README「目录约定」）
+data/
+store/
+blobs/
+
+# Python
+__pycache__/
+*.pyc
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
