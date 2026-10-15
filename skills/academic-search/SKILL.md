@@ -42,8 +42,9 @@ agent_created: true
 | 看**本地库里**已经有什么（不联网、零成本） | `search` 不给检索式 + `--refresh false` |
 | 拿到确定的某一篇 | `lookup --doi` / `--arxiv` / `--title` 三选一 |
 | 某个方向的最新进展 | 只有 `search --refresh true`（`sync` 未接线） |
-| 某个方向的**经典 / 高被引**论文 | `search --min-citations N`（或 `--min-fwci X` 跨领域比）；这两个是**取数条件**，会多花一次请求，但带回的是「被引最高的一批」 |
-| **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给名字（会议与期刊都可以，如 `IEEE T-RO` / `JAAMAS`）；清单在 `src/academic_search/venues.toml`（15 条），**解析不到会报错**。给了它会跳过 arXiv 腿 |
+| 某个方向**最新**的高被引论文 | `search --min-citations N`（或 `--min-fwci X` 跨领域比）。这两个是**取数条件**，会多花一次请求，默认按日期取数，所以带回的是「最新的、被引超过阈值的一批」 |
+| 某个方向的**经典**（全局被引头部） | 在上面基础上再加 `--sort citations`。它排的是**全局**被引、不是相关性，头部会有跨领域命中，必须逐条复核主题（§6 第 6 条） |
+| **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给名字（会议与期刊都可以，如 `IEEE T-RO` / `JAAMAS` / `AAMAS`）；清单在 `src/academic_search/venues.toml`（16 条），**解析不到会报错**。给了它会跳过 arXiv 腿 |
 | `config/profile.toml` 能不能用 | `profile check` |
 
 **两条命令的取数顺序不同，不要用一句话概括**：`search` 是「按新鲜度决定要不要联网刷新 → 查本地库」，所以 `--refresh false` 也能返回库里已有的东西；`lookup` 是「先查本地库，没命中才联网」。两条命令的结果**都来自本地库**。
@@ -103,6 +104,7 @@ agent_created: true
 
 ## 7. 环境要求与未接线
 
+- **需要一个可用的 Python**（`>=3.11`，用到标准库 `tomllib`）。启动器找解释器的顺序：先看 `ACADEMIC_SEARCH_PYTHON`，没设则 Windows 依次试 `python`、`py`，POSIX 依次试 `python3`、`python`；Windows 版还会先探测解释器能不能执行 `import sys`，探测失败即退出码 1、**不产出 JSON 信封**（实测：`python` 命中应用商店存根时就是这样）。这属于环境问题、不是源失败，把 `ACADEMIC_SEARCH_PYTHON` 指到真解释器即可。
 - **OpenAlex 需要 API key**：匿名档的每日额度按出口 IP 共享、很容易耗尽（额度用尽时返回 429）。要用 OpenAlex，先把 key 放进环境变量 `OPENALEX_API_KEY`；只用 `--source arxiv` 则不需要任何凭据。
 - 结果里每条 `sources[].source` 说明该项来自哪个源、扮演什么角色（`preprint` / `primary` / `published`）。
 - 未接线：`sync` / `textify` / `read` / `digest list|put` / `export` / `bundle`；`promote` / `graph` 同样尚未实现。

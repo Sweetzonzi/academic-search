@@ -45,8 +45,14 @@ scripts/run.cmd search --any-of "multi-agent" --sort citations --limit 20 --refr
 # f) 清单带上摘要片段，便于判断相关性（截断长度由 config/search.toml 的 abstract.chars 控制）
 scripts/run.cmd search --all-of "world model" --any-of drone --abstract --limit 10 --refresh false
 
-# g) 找经典：远端按被引过滤 + 本地同判，arXiv 腿自动跳过（实测 8 条全部 ≥ 100）
+# g) 找「最新的高被引」：远端按被引过滤 + 本地同判，arXiv 腿自动跳过（实测 8 条全部 ≥ 100）
+#    注意默认按日期取数，所以回来的是**最新的**那一批（实测那 8 条的出版年是 2019–2025），不是经典
 scripts/run.cmd search --any-of "world model" --min-citations 100 --refresh true --limit 8
+
+# g′) 找经典：再加 --sort citations 换成按被引取数。两档是两次不同的请求
+#     它排的是**全局**被引，头部会有跨领域命中（实测同一检索式的头部是 1997 年的社会学论文与
+#     2006 年的脑网络），必须逐条复核主题相关性
+scripts/run.cmd search --any-of "world model" --min-citations 100 --sort citations --refresh true --limit 8
 
 # h) 按载体筛：远端走 source id、本地走载体集合（实测 ICRA 一次取回 100 条）
 scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limit 5
@@ -58,7 +64,7 @@ scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limi
 - **不要给空关键词**：`--all-of ""` 实测 `ok=false`、`error.code=internal_error`（FTS5 语法错误）。要列全部就别带这个词。
 - `--limit` 数的是 **work**，不是 record：一篇由 arXiv + OpenAlex 两条记录合成的只算 1。
 - **`--refresh false` 也会写一条 run 台账**（`refreshed=0`、`requests=0`、`counts={}`）；`lookup` 的离线命中不写。两者都不发网络请求。
-- **「被引高」不是「这个领域里重要」。** `--sort citations` 与 `--min-citations` 排/筛的都是**全局**被引，与主题只有「短语命中」这一层关系。实测 `"world model"` 按被引降序的头部是：1971 年的定理证明（被引 4 865）、1997 年的社会学论文（4 684）、2006 年的脑网络（2 591），**前五里只有两条**与「世界模型」有关（`docs/实验/EX-2026-10-16-检索口径与来源校验.md` §12(b)(c)）。短语命中还可能是分词的产物——`small-world models` 含子串 `world model`，`world modeling` 归并成同一词。→ 用这两个参数时**主题词要给具体**、取回后**逐条复核主题相关性**，并在回答里说明「这是按被引排的，不是按相关性排的」。
+- **「被引高」不是「这个领域里重要」。** `--sort citations` 与 `--min-citations` 排/筛的都是**全局**被引，与主题只有「短语命中」这一层关系。**先分清两个档**：只给 `--min-citations` 时仍按默认的 `--sort date` 取数，回来的是「最新的、被引超过阈值的一批」（实测 8 条出版年落在 2019–2025）；**要经典必须再给 `--sort citations`**，那时才按被引降序取。实测 `"world model"` 按被引降序的头部是：1971 年的定理证明（被引 4 865）、1997 年的社会学论文（4 684）、2006 年的脑网络（2 591），**前五里只有两条**与「世界模型」有关（`docs/实验/EX-2026-10-16-检索口径与来源校验.md` §12(b)(c)）。短语命中还可能是分词的产物——`small-world models` 含子串 `world model`，`world modeling` 归并成同一词。→ 用这两个参数时**主题词要给具体**、取回后**逐条复核主题相关性**，并在回答里说明「这是按被引排的，不是按相关性排的」。
 
   ```powershell
   # 反例：宽泛主题 + 被引阈值 → 头部是跨领域噪声
@@ -166,7 +172,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 | `name` | ✅ | 查询名，**本文件内唯一**；也是 `sync --query` 的名字 |
 | `any_of` | 与 `all_of` 至少给一组 | 关键词并集，同义词放这里 |
 | `all_of` | 同上 | 关键词交集；与 `any_of` 同时生效 |
-| `venues` | 可选 | 载体白名单，写名字（会议与期刊都可以）。登记表有 15 条：ICRA / IROS / NeurIPS / ICML / ICLR / arXiv，以及 RA-L / IEEE T-RO / IJRR / Science Robotics / Journal of Field Robotics / Autonomous Robots / JAAMAS / JAIR / Artificial Intelligence——**完整清单与别名见 `src/academic_search/venues.toml`**。名字解析不到会让该查询报错。**`AAMAS` 登记不上**：OpenAlex 里没有这个会议的载体实体（只有同名期刊 `S5405189`），把会议名映射到期刊会让名字与实体错位，所以会议侧靠关键词召回 |
+| `venues` | 可选 | 载体白名单，写名字（会议与期刊都可以）。登记表有 16 条：ICRA / IROS / NeurIPS / ICML / ICLR / arXiv，以及 RA-L / IEEE T-RO / IJRR / Science Robotics / Journal of Field Robotics / Autonomous Robots / AAMAS / JAAMAS / JAIR / Artificial Intelligence——**完整清单与别名见 `src/academic_search/venues.toml`**。名字解析不到会让该查询报错。**`AAMAS`（会议）与 `JAAMAS`（期刊）是两个实体**，名字只差 `Multiagent` / `Multi-Agent` 的拼写：写缩写 `AAMAS` 得到会议 `S4306417597`，写带连字符的全称 `Autonomous Agents and Multi-Agent Systems` 得到期刊 `S5405189`，写会议真名（`Multiagent` 连写）解析不到、直接报错 |
 | `authors` | 可选 | 作者白名单 |
 | `since_years` | 可选 | 回看窗口，默认 3 年 |
 | `expires` | 可选 | 到期日期；只有临时专题才写 |

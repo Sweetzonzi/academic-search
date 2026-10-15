@@ -16,10 +16,12 @@
 # **别登记覆盖残缺的实体**：ICML / ICLR 是已知例外（上游就是碎片，见各自的 note），
 # 其余登记项都先把 `show` 的逐年覆盖看过再写进来。
 #
-# **查不到实体的载体登记不上**（实测见 EX-2026-10-16-source-contract §16(a)）：
-#   AAMAS —— 会议在 OpenAlex 没有 source 实体（五种全称片段与缩写都返回 0 条，
-#   AAMAS 2019 的 ACM 会议 DOI 直接 404）；唯一同名实体是期刊 S5405189，
-#   把会议名映射到期刊会让名字与实体错位。画像里因此不写 AAMAS，靠关键词召回。
+# **「按会名搜不到」不等于「没有实体」**——登记前必须用 `locations.source.id`
+# 反查一篇该会的论文来确认（实测见 EX-2026-10-16-source-contract §16(a)(f)）。
+# 反例：AAMAS 的会议实体 `S4306417597` 有 9 972 篇、逐年覆盖健康，但 OpenAlex 给
+# 它的载体名是 `Adaptive Agents and Multi-Agents Systems`——少了 `Autonomous`、
+# `Multiagent` 被拆成 `Multi-Agents`。按会议真名（Autonomous Agents and Multiagent
+# Systems）与缩写 `AAMAS` 搜都返回 0 条，只有片段 `Adaptive Agents` 命中它。
 #
 # ids 的确认路径：experiments/m1.5/26_venue_source_ids.py
 # （`list` 列候选 → `show` 看逐年覆盖 → `count` 核当年作品数 → `work` 反查一篇论文的载体）。
@@ -94,13 +96,21 @@ name = "Autonomous Robots"
 ids  = ["S144091109"]
 note = "1 740 篇，2024 年 31 篇。`display_name.search:` 下同片段还会返回两个机器人仿真会议，不登记"
 
+# ---- 会议：多智能体 ----
+
+[[venue]]
+name = "AAMAS"
+aliases = ["Adaptive Agents and Multi-Agents Systems"]
+ids  = ["S4306417597"]
+note = "载体名是 `Adaptive Agents and Multi-Agents Systems`，**不是**会议全称 Autonomous Agents and Multiagent Systems——按真名与缩写都搜不到它（见文件顶部）。会议实体 9 972 篇，2025 年 466 篇。两个拼写陷阱：会议真名 `Autonomous Agents and Multiagent Systems`（`Multiagent` 连写）解析不到、报错；写成带连字符的 `Autonomous Agents and Multi-Agent Systems` 会命中期刊 JAAMAS——那是期刊的实际载体名，两者只靠 `Multiagent` / `Multi-Agent` 的拼写区分"
+
 # ---- 期刊：多智能体与通用 AI ----
 
 [[venue]]
 name = "JAAMAS"
 aliases = ["Autonomous Agents and Multi-Agent Systems"]
 ids  = ["S5405189"]
-note = "AAMAS 那个社区的期刊（**会议本身在 OpenAlex 没有实体**，见文件顶部）；986 篇，2024 年 52 篇"
+note = "AAMAS 那个社区的期刊；986 篇，2024 年 52 篇。会议本身是另一个实体（见 AAMAS 条），两者不要混"
 
 [[venue]]
 name = "JAIR"

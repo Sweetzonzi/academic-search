@@ -97,13 +97,39 @@ def test_load_registry_missing_file_is_empty(tmp_path):
 
 
 def test_shipped_registry_covers_the_profile_whitelists():
-    """`config/profile.toml` 三个查询写下的会名，除 AAMAS 外都应解析得到。
+    """`config/profile.toml` 三个查询写下的每一个会名都应解析得到。
 
-    AAMAS 在 OpenAlex 里没有会议实体（只有同名期刊 `S5405189`），
-    这一点记在 EX-2026-10-16-source-contract §16，不静默替换。
+    `AAMAS` 的会议实体载体名被上游写成 `Adaptive Agents and Multi-Agents Systems`，
+    按会议真名与缩写搜都是 0 条；能登记它靠 `locations.source.id` 反查，
+    这一点记在 EX-2026-10-16-source-contract §16(a)(f)，不静默替换成期刊。
     """
-    _, unknown = venues.resolve(["NeurIPS", "ICML", "ICLR", "ICRA", "IROS", "RA-L"])
+    _, unknown = venues.resolve(
+        ["NeurIPS", "ICML", "ICLR", "ICRA", "IROS", "RA-L",
+         "AAMAS", "JAAMAS", "JAIR", "Artificial Intelligence"]
+    )
     assert unknown == []
+
+
+def test_aamas_conference_and_journal_are_distinct_entities():
+    """别名撞车会让会议名静默落到期刊上——这两条必须是两个 id。"""
+    conference, _ = venues.resolve(["AAMAS"])
+    journal, _ = venues.resolve(["JAAMAS"])
+    assert conference == ["s4306417597"]
+    assert journal == ["s5405189"]
+    assert conference != journal
+
+
+def test_aamas_full_name_spellings_do_not_silently_cross_entities():
+    """会议真名与期刊名只差 `Multiagent` / `Multi-Agent` 的拼写，两者不能互相顶替。
+
+    会议真名（连写）不登记 → 报错，这是 fail-closed 的一侧；
+    带连字符的写法是期刊 `S5405189` 的实际载体名，落到期刊是正确的。
+    """
+    assert venues.resolve(["Autonomous Agents and Multiagent Systems"]) == (
+        [],
+        ["Autonomous Agents and Multiagent Systems"],
+    )
+    assert venues.resolve(["Autonomous Agents and Multi-Agent Systems"])[0] == ["s5405189"]
 
 
 @pytest.mark.parametrize("name", ["", "   ", "S", "S12x"])
