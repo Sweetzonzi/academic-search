@@ -20,9 +20,9 @@
 | `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §4 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
 | `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`；当前没有投影，效果等于 `meta` |
-| `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档各抓一次、都进同一个池，因此换档会联网、也会得到不同的 `spec_hash` |
-| `--min-citations N` | 关闭 | 原始被引下限：远端下发 `filter=cited_by_count:>N`，本地按同一条件再判一次，**`cited_by_count` 为空即不通过**；给了它就**跳过 arXiv 腿**（那边没有被引数据） |
-| `--min-fwci X` | 关闭 | 领域归一化被引下限，同上（`filter=fwci:>X`）；与 `--min-citations` 同时给出时**取与** |
+| `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档各抓一次、都进同一个池，因此换档会联网、也会得到不同的 `spec_hash`。注意它排的是**全局**被引，见下面的坑 |
+| `--min-citations N` | 关闭 | 原始被引下限：远端下发 `filter=cited_by_count:>N`，本地按同一条件再判一次，**`cited_by_count` 为空即不通过**；给了它就**跳过 arXiv 腿**（那边没有被引数据）。与主题条件是**与**关系，叠加不额外计费 |
+| `--min-fwci X` | 关闭 | 领域归一化被引下限，同上（`filter=fwci:>X`）；与 `--min-citations` 同时给出时**取与**。**覆盖不完整**：很新的论文与部分类型没有该值，而空值不通过 → 它偏向**有一定年头**的文献，见下面的坑 |
 | `--abstract` | 关闭（布尔开关） | 打开时每条附上摘要，截断到 `config/search.toml` 的 `abstract.chars`（默认 800）个字符。**不进 `spec_hash`**，所以不影响「同一检索式命中同一本 run 账本」。`lookup` 不受它约束——`lookup` 固定带完整摘要 |
 
 **用法清单（每条都实测过）：**
@@ -59,6 +59,16 @@ scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limi
 - **不要给空关键词**：`--all-of ""` 实测 `ok=false`、`error.code=internal_error`（FTS5 语法错误）。要列全部就别带这个词。
 - `--limit` 数的是 **work**，不是 record：一篇由 arXiv + OpenAlex 两条记录合成的只算 1。
 - **`--refresh false` 也会写一条 run 台账**（`refreshed=0`、`requests=0`、`counts={}`）；`lookup` 的离线命中不写。两者都不发网络请求。
+- **「被引高」不是「这个领域里重要」。** `--sort citations` 与 `--min-citations` 排/筛的都是**全局**被引，与主题只有「短语命中」这一层关系。实测 `"world model"` 按被引降序的头部是：1971 年的定理证明（被引 4 865）、1997 年的社会学论文（4 684）、2006 年的脑网络（2 591），**前五里只有两条**与「世界模型」有关（`docs/实验/EX-2026-10-16-检索口径与来源校验.md` §12(b)(c)）。短语命中还可能是分词的产物——`small-world models` 含子串 `world model`，`world modeling` 归并成同一词。→ 用这两个参数时**主题词要给具体**、取回后**逐条复核主题相关性**，并在回答里说明「这是按被引排的，不是按相关性排的」。
+
+  ```powershell
+  # 反例：宽泛主题 + 被引阈值 → 头部是跨领域噪声
+  scripts/run.cmd search --any-of "world model" --sort citations --refresh true --limit 5
+  # 正例：具体主题 + 阈值 + 复核
+  scripts/run.cmd search --all-of "world model" --any-of "quadrotor" --min-citations 50 --refresh true
+  ```
+
+- **`--min-fwci` 会整批丢掉最新论文。** `fwci` 是 OpenAlex 的加工指标，很新的论文与部分类型没有该值，而「空值不通过」是刻意的（fail-closed）。→ **追新**用 `--refresh true` 不加阈值；要**找经典**才加，并预期结果是「有一定年头的文献」。两个阈值各有分工：`--min-citations` 直观但随领域漂移，`--min-fwci` 以「领域同年平均 = 1」为尺度、跨领域不用重猜。
 
 ---
 
