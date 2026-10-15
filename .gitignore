@@ -15,6 +15,7 @@ experiments/*/*
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # 编辑器 / 系统
 .DS_Store

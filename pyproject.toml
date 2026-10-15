@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "academic-search"
+version = "0.0.0"
+description = "本地优先的 LLM 文献检索与阅读辅助 CLI"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "live: 需要真实网络的测试（默认跳过）",
+]
+addopts = '-m "not live" --strict-markers'

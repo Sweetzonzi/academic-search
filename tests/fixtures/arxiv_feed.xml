@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<ns0:entry xmlns:ns0="http://www.w3.org/2005/Atom" xmlns:ns1="http://arxiv.org/schemas/atom">
+    <ns0:id>http://arxiv.org/abs/2610.18808v1</ns0:id>
+    <ns0:title>Optimizing Team Behavior via Extremum-seeking Control in Multi-agent Reinforcement Learning</ns0:title>
+    <ns0:updated>2026-10-13T17:46:27Z</ns0:updated>
+    <ns0:link href="https://arxiv.org/abs/2610.18808v1" rel="alternate" type="text/html" />
+    <ns0:link href="https://arxiv.org/pdf/2610.18808v1" rel="related" type="application/pdf" title="pdf" />
+    <ns0:summary>In cooperative Multi-Agent Reinforcement Learning (MARL), agents must learn to coordinate their actions to achieve shared objectives. A key indicator of effective coordination is behavioral diversity, i.e., the agents' potential to enact distinct yet complementary control policies given the same set of observations. Although behavioral diversity can enable role specialization and richer joint behaviors, its appropriate level is highly context- and task-dependent and often costly to tune. We propose Adaptive Diversity Control (ADiCo), a two-timescale framework that adapts behavioral diversity online during training. On a fast timescale, Diversity Control (DiCo) regulates system diversity toward a target value. On a slower timescale, an Extremum Seeking Controller (ESC) adjusts this target using only mean episodic returns, without requiring an explicit model or analytical gradient of the diversity-performance landscape. We evaluate ADiCo on six configurations across two cooperative MARL tasks, where it maintains task-appropriate diversity levels: low diversity when homogeneous policies are beneficial and higher diversity when heterogeneous policies are required. Through this adaptation, ADiCo matches or exceeds the mean performance of DiCo (best grid-searched diversity target) and Unconstrained DiCo (diversity allowed to emerge without target regulation). These results demonstrate that incorporating classical feedback control into MARL training enables effective coordination by providing a systematic alternative to task-specific manual selection of the diversity target.</ns0:summary>
+    <ns0:category term="cs.MA" scheme="http://arxiv.org/schemas/atom" />
+    <ns0:category term="cs.AI" scheme="http://arxiv.org/schemas/atom" />
+    <ns0:category term="cs.RO" scheme="http://arxiv.org/schemas/atom" />
+    <ns0:category term="eess.SY" scheme="http://arxiv.org/schemas/atom" />
+    <ns0:published>2026-10-13T17:46:27Z</ns0:published>
+    <ns1:comment>Accepted for publication at the 65th IEEE Conference on Decision and Control (CDC 2026), Hawaii, USA</ns1:comment>
+    <ns1:primary_category term="cs.MA" />
+    <ns0:author>
+      <ns0:name>Svar Rajankumar Patel</ns0:name>
+    </ns0:author>
+    <ns0:author>
+      <ns0:name>Kshitij Jerath</ns0:name>
+    </ns0:author>
+  </ns0:entry>
+  
+<ns0:entry xmlns:ns0="http://www.w3.org/2005/Atom" xmlns:ns1="http://arxiv.org/schemas/atom">
+    <ns0:id>http://arxiv.org/abs/2610.18758v1</ns0:id>
+    <ns0:title>Compositional Sensitivity Analysis for Multiobjective System Co-Design</ns0:title>
+    <ns0:updated>2026-10-13T17:22:02Z</ns0:updated>
+    <ns0:link href="https://arxiv.org/abs/2610.18758v1" rel="alternate" type="text/html" />
+    <ns0:link href="https://arxiv.org/pdf/2610.18758v1" rel="related" type="application/pdf" title="pdf" />
+    <ns0:summary>Sensitivity analysis of coupled systems typically propagates derivatives of single-valued maps, whereas multiobjective optimization generally treats sensitivity at the system level rather than through interconnected subsystems. We develop a mathematical framework for compositional sensitivity analysis in multiobjective system design, building on monotone co-design. Subsystems are represented as design problems (DPs), interconnected through series, parallel, union, intersection, and feedback composition. We introduce tangential DPs (TDPs) to describe first-order variations around an operating point, show that they preserve the structure of DPs, and characterize their queries through graphical derivatives. To account for multiple internal realizations of a system-level operating point, tangential co-design problems compose families of local TDPs by taking a union over these realizations while retaining the original interconnection structure. We show that these compositions yield families of TDPs and establish conditions under which sensitivity analysis commutes with individual composition operations. Beyond infinitesimal sensitivity, we show that bounded tangential models of convex DPs provide tighter outer approximations of feasible finite changes, which can be propagated through co-design problems without union compositions. We conclude with several convex and nonconvex numerical examples that showcase the framework's accuracy and computational benefits.</ns0:summary>
+    <ns0:category term="math.OC" scheme="http://arxiv.org/schemas/atom" />
+    <ns0:category term="eess.SY" scheme="http://arxiv.org/schemas/atom" />
+    <ns0:published>2026-10-13T17:22:02Z</ns0:published>
+    <ns1:primary_category term="math.OC" />
+    <ns0:author>
+      <ns0:name>Alan Bonomi</ns0:name>
+    </ns0:author>
+    <ns0:author>
+      <ns0:name>Antonio Terpin</ns0:name>
+    </ns0:author>
+    <ns0:author>
+      <ns0:name>Yubo Cai</ns0:name>
+    </ns0:author>
+    <ns0:author>
+      <ns0:name>Yujun Huang</ns0:name>
+    </ns0:author>
+    <ns0:author>
+      <ns0:name>Meshal Alharbi</ns0:name>
+    </ns0:author>
+    <ns0:author>
+      <ns0:name>Gioele Zardini</ns0:name>
+    </ns0:author>
+  </ns0:entry>
+  
+</feed>

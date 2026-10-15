@@ -1,0 +1,158 @@
+"""store：迁移、写锁、幂等键与刷新不覆盖 NULL。"""
+
+from __future__ import annotations
+
+import sqlite3
+
+import pytest
+
+from academic_search import envelope, store
+
+
+@pytest.fixture()
+def conn(tmp_path):
+    c = store.connect(tmp_path / "data" / "sidecar.db")
+    yield c
+    c.close()
+
+
+def test_schema_version_set(conn):
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
+
+
+def test_all_v1_tables_exist(conn):
+    names = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view')")
+    }
+    for t in [
+        "record", "record_ident", "work", "work_member", "candidate",
+        "derived_content", "artifact", "run", "dup_suspect", "record_fts",
+    ]:
+        assert t in names, t
+
+
+def test_reopen_is_idempotent(tmp_path):
+    p = tmp_path / "sidecar.db"
+    c1 = store.connect(p)
+    c1.close()
+    c2 = store.connect(p)  # ensure_schema 再跑一次不应报错
+    c2.close()
+
+
+def test_write_tx_commits(conn):
+    with store.write_tx(conn):
+        store.start_run(
+            conn, spec_hash="h", query_name=None, refreshed=True,
+            window_from="2026-01-01", window_to="2026-02-01",
+        )
+    assert conn.execute("SELECT COUNT(*) AS n FROM run").fetchone()["n"] == 1
+
+
+def test_write_tx_rolls_back_on_error(conn):
+    with pytest.raises(RuntimeError):
+        with store.write_tx(conn):
+            store.start_run(
+                conn, spec_hash="h", query_name=None, refreshed=False,
+                window_from=None, window_to=None,
+            )
+            raise RuntimeError("boom")
+    assert conn.execute("SELECT COUNT(*) AS n FROM run").fetchone()["n"] == 0
+
+
+def test_busy_when_lock_held(tmp_path):
+    p = tmp_path / "sidecar.db"
+    a = store.connect(p)
+    b = store.connect(p)
+    try:
+        a.execute("BEGIN IMMEDIATE")
+        with pytest.raises(envelope.EnvelopeError) as ei:
+            with store.write_tx(b):
+                pass
+        assert ei.value.code == envelope.BUSY
+    finally:
+        a.execute("ROLLBACK")
+        a.close()
+        b.close()
+
+
+def _record(uid="u1", **over):
+    row = {"record_uid": uid, "source": "openalex", "source_id": "w1", "title": "T",
+           "abstract": "A"}
+    row.update(over)
+    return row
+
+
+def test_insert_and_ident_unique(conn):
+    with store.write_tx(conn):
+        store.start_run(conn, spec_hash="h", query_name=None, refreshed=False,
+                        window_from=None, window_to=None)
+        store.insert_record(conn, _record())
+        assert store.upsert_ident(conn, "doi", "10.1/x", "u1") is True
+        # 同一别名再登记给别人 -> 拒绝
+        store.insert_record(conn, _record(uid="u2", source="doi", source_id="10.1/x"))
+        assert store.upsert_ident(conn, "doi", "10.1/x", "u2") is False
+    assert store.record_uids_by_ident(conn, "doi", "10.1/x") == ["u1"]
+
+
+def test_refresh_does_not_overwrite_with_null(conn):
+    with store.write_tx(conn):
+        store.start_run(conn, spec_hash="h", query_name=None, refreshed=False,
+                        window_from=None, window_to=None)
+        store.insert_record(conn, _record(cited_by_count=5))
+        store.update_record(conn, "u1", {"cited_by_count": None, "venue": "ICRA"})
+    row = store.get_record(conn, "u1")
+    assert row["cited_by_count"] == 5          # 取不到不覆盖
+    assert row["venue"] == "ICRA"
+
+
+def test_fts_search(conn):
+    with store.write_tx(conn):
+        store.start_run(conn, spec_hash="h", query_name=None, refreshed=False,
+                        window_from=None, window_to=None)
+        store.insert_record(conn, _record(uid="u1", title="World Models", abstract="UAV planning"))
+        store.insert_record(conn, _record(uid="u2", source="arxiv", source_id="1",
+                                          title="Cooking", abstract="recipes"))
+    assert store.search_fts(conn, "world", 10) == ["u1"]
+
+
+def test_fts_updated_on_refresh(conn):
+    with store.write_tx(conn):
+        store.start_run(conn, spec_hash="h", query_name=None, refreshed=False,
+                        window_from=None, window_to=None)
+        store.insert_record(conn, _record(uid="u1", title="Old", abstract="x"))
+        store.update_record(conn, "u1", {"title": "New"})
+    assert store.search_fts(conn, "old", 10) == []
+    assert store.search_fts(conn, "new", 10) == ["u1"]
+
+
+def test_candidate_idempotent(conn):
+    with store.write_tx(conn):
+        run_id = store.start_run(conn, spec_hash="h", query_name=None, refreshed=False,
+                                 window_from=None, window_to=None)
+        store.create_work(conn, "wk")
+        assert store.add_candidate(conn, "wk", run_id) is True
+        assert store.add_candidate(conn, "wk", run_id) is False
+
+
+def test_merge_redirects(conn):
+    with store.write_tx(conn):
+        run_id = store.start_run(conn, spec_hash="h", query_name=None, refreshed=False,
+                                 window_from=None, window_to=None)
+        store.insert_record(conn, _record(uid="u1"))
+        store.insert_record(conn, _record(uid="u2", source="arxiv", source_id="1"))
+        store.create_work(conn, "wk1")
+        store.create_work(conn, "wk2")
+        store.add_member(conn, "u1", "wk1", "primary")
+        store.add_member(conn, "u2", "wk2", "primary")
+        store.merge_works(conn, "wk1", "wk2")
+    assert store.member_work(conn, "u2") == "wk1"
+    assert store.resolve_work(conn, "wk2") == "wk1"
+    # 行不删
+    assert store.work_exists(conn, "wk2")
+
+
+def test_foreign_keys_on(conn):
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO work_member (record_uid, work_key, role) VALUES ('x','y','primary')")

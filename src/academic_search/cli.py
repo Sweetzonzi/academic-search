@@ -1,0 +1,155 @@
+"""参数解析、命令分派、信封组装与退出码。
+
+契约：docs/03-接口契约.md §1、docs/接口/输出载荷.md。
+不碰 SQL 与网络（DEV-CONV §4）；用例编排在 service.py。
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+from . import __version__, config, envelope, paths, service
+from .sources import SearchSpec
+
+
+def resolve_root(explicit: str | None = None) -> Path:
+    """--root → ACADEMIC_SEARCH_ROOT → 当前目录（ADR-0055）。"""
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    env = os.environ.get("ACADEMIC_SEARCH_ROOT")
+    if env:
+        return Path(env).expanduser().resolve()
+    return Path.cwd()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="academic-search")
+    parser.add_argument("--root", help="仓库根（含 config/ 与 data/）")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    search = sub.add_parser("search", help="当场给的检索式 → 刷新（可选）→ 查库 → 结果列表")
+    search.add_argument("--all-of", action="append", default=[], metavar="词")
+    search.add_argument("--any-of", action="append", default=[], metavar="词")
+    search.add_argument("--venue", action="append", default=[], metavar="名")
+    search.add_argument("--author", action="append", default=[], metavar="名")
+    search.add_argument("--since-years", type=int, default=None)
+    search.add_argument("--limit", type=int, default=20)
+    search.add_argument("--source", action="append", default=[], metavar="源")
+    search.add_argument("--refresh", choices=["auto", "true", "false"], default="auto")
+    search.add_argument("--max-age", type=float, default=None, dest="max_age")
+    search.add_argument("--in", choices=["meta", "body", "both"], default="meta", dest="in_scope")
+    search.add_argument("--sort", choices=["citations", "date"], default="date")
+
+    lookup = sub.add_parser("lookup", help="按 DOI / arXiv ID / 标题取条目或候选")
+    lookup.add_argument("--doi")
+    lookup.add_argument("--arxiv")
+    lookup.add_argument("--title")
+    lookup.add_argument("--limit", type=int, default=20)
+    lookup.add_argument("--refresh", choices=["auto", "true", "false"], default="auto")
+
+    profile = sub.add_parser("profile", help="画像的只读通道")
+    profile_sub = profile.add_subparsers(dest="subcommand", required=True)
+    profile_sub.add_parser("show")
+    profile_sub.add_parser("check")
+    profile_sub.add_parser("scaffold")
+
+    verify = sub.add_parser("verify", help="抽样重算 bytes/ 的 sha256")
+    verify.add_argument("--sample", type=int, default=20)
+
+    sub.add_parser("version")
+    return parser
+
+
+def _dispatch(args, name: str):
+    root = resolve_root(args.root)
+    if name == "search":
+        cfg = config.load_search(root)
+        enabled = config.load_sources(root)
+        requested = list(args.source) if args.source else config.active_sources(enabled)
+        sources = [s for s in requested if s in config.SEARCH_SOURCES and enabled.get(s)]
+        spec = SearchSpec(
+            all_of=list(args.all_of),
+            any_of=list(args.any_of),
+            venues=list(args.venue),
+            authors=list(args.author),
+            since_years=args.since_years,
+        )
+        outcome = service.run_search(
+            root, spec, limit=args.limit, sources=sources, refresh=args.refresh,
+            max_age_hours=int(args.max_age) if args.max_age else cfg.max_age_hours,
+            sort=args.sort, in_scope=args.in_scope, blacklist=cfg.venue_blacklist,
+        )
+        return outcome.payload(), 0
+
+    if name == "lookup":
+        cfg = config.load_search(root)
+        if not (args.doi or args.arxiv or args.title):
+            raise envelope.EnvelopeError(envelope.INVALID_ARGS, "必须给 --doi / --arxiv / --title 之一")
+        outcome = service.run_lookup(
+            root, doi=args.doi, arxiv_id=args.arxiv, title=args.title,
+            refresh=args.refresh, limit=args.limit, blacklist=cfg.venue_blacklist,
+        )
+        return outcome.payload(), 0
+
+    if name == "verify":
+        mismatches = paths.verify_bytes(root, sample=args.sample)
+        if mismatches:
+            detail = "; ".join(m["path"] + " 期望 " + m["expected"] for m in mismatches)
+            raise envelope.EnvelopeError(envelope.IO_ERROR, "sha256 不匹配：" + detail)
+        return {"checked_sample": args.sample, "mismatches": []}, 0
+
+    if name == "profile.show":
+        profile, errors = config.load_profile(root)
+        if profile is None:
+            message = errors[0].message if errors else "没有画像：" + str(config.config_dir(root) / config.PROFILE)
+            raise envelope.EnvelopeError(
+                envelope.PROFILE_INVALID if errors else envelope.NO_PROFILE, message
+            )
+        return {"queries": [q.as_dict() for q in profile.queries]}, 0
+
+    if name == "profile.check":
+        result = config.check_profile(root)
+        error = result.get("error")
+        if error and error.get("code") == envelope.NO_PROFILE:
+            raise envelope.EnvelopeError(envelope.NO_PROFILE, error["message"])
+        if not result["ok"]:
+            messages = []
+            for item in result["errors"]:
+                prefix = ("第 " + str(item["line"]) + " 行：") if item.get("line") else ""
+                messages.append(prefix + item["message"])
+            raise envelope.EnvelopeError(envelope.PROFILE_INVALID, "; ".join(messages))
+        return {"queries": result["queries"]}, 0
+
+    if name == "profile.scaffold":
+        return {"template": config.scaffold_profile()}, 0
+
+    if name == "version":
+        return {"version": __version__, "schema": envelope.SCHEMA_VERSION}, 0
+
+    raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知命令：" + name)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    name = args.command if args.command != "profile" else "profile." + args.subcommand
+    try:
+        data, code = _dispatch(args, name)
+    except envelope.EnvelopeError as exc:
+        envelope.dump(envelope.failure(name, exc.code, exc.message))
+        return 1
+    except KeyboardInterrupt:
+        envelope.dump(envelope.failure(name, envelope.IO_ERROR, "被中断"))
+        return 1
+    except Exception as exc:  # noqa: BLE001 - 兜底转 internal_error
+        envelope.dump(envelope.failure(name, envelope.INTERNAL_ERROR, str(exc)))
+        return 1
+    envelope.dump(envelope.success(name, data))
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
