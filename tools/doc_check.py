@@ -154,7 +154,7 @@ def check_sections(files: list[pathlib.Path]) -> int:
 
 
 def top_dirs() -> set[str]:
-    """本仓库的顶层目录。运行期目录见 README「目录约定」，可能尚未创建，固定列入。"""
+    """本仓库的顶层目录。本地数据目录见 README「目录约定」，可能尚未创建，固定列入。"""
     runtime = {"data", "bytes", "works"}
     return runtime | {p.name for p in ROOT.iterdir() if p.is_dir() and not p.name.startswith(".")}
 
