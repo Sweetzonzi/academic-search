@@ -68,7 +68,7 @@ title: "设计决策索引"
 | [ADR-0040](ADR-0040.md) | 配置集中在 `config/` | 一份配置一个固定文件名；画像只有一份；密钥不进配置 | accepted |
 | [ADR-0041](ADR-0041.md) | 临时检索 | `--all-of`／`--any-of` 当场给检索式；结果照样落候选池（具名查询入口已由 [ADR-0049](ADR-0049.md) 移出 `search`） | accepted |
 | [ADR-0042](ADR-0042.md) | v1 只支持英文检索 | FTS5 用默认分词器；中文翻译不进索引，只给人读 | accepted |
-| [ADR-0043](ADR-0043.md) | 检索只有一条路径 | 刷新（可选）→ 查库 → 返回；`--refresh auto\|true\|false`，判据按 `spec_hash` | accepted |
+| [ADR-0043](ADR-0043.md) | 检索只有一条路径 | 刷新（可选）→ 查库 → 返回；`--refresh auto\|true\|false`，判据按 `spec_hash` | partially superseded by ADR-0065 |
 | [ADR-0044](ADR-0044.md) | 候选池不设状态机 | 行存在即入过池；`dismissed_at` / `dismissed_until` 两个可空时间戳；质量分级在读取端过滤 | accepted |
 | [ADR-0045](ADR-0045.md) | 面向阅读的派生文本进 `bytes/` | 译文与中文摘要的文本进 `bytes/`，sidecar 只留缓存键与指针；FTS5 只索引英文原文 | accepted |
 | [ADR-0046](ADR-0046.md) | 初版范围收在 M0–M3 | 引用图谱（M4 的 `graph`）在初版之外；`graph` 保留命令形状、实现后移 | accepted |
@@ -90,4 +90,5 @@ title: "设计决策索引"
 | [ADR-0062](ADR-0062.md) | `spec_hash` 的口径与取数页大小 | `spec_hash` = 远端请求的声明式参数（含 `--source` / `--sort` / 两个阈值）；解析后的日期与 `--limit` / `--abstract` / `--in` 不进；取数固定一页 100 条，`--limit` 只管展示 | accepted |
 | [ADR-0063](ADR-0063.md) | 检索门 | 主题条件改用 `search.title_and_abstract=` 的单个布尔串；每个值一律加引号（因此不需要转义层）；结构化条件继续走 `filter=` | accepted |
 | [ADR-0064](ADR-0064.md) | L1 补桥 | 桥是「声明」不是「标识」：`record_ident` 区分 `ident` / `bridge`，桥可被真正的持有者接管；校验落在 `ingest()` 的 L1 分支且归组前做 | accepted |
+| [ADR-0065](ADR-0065.md) | `lookup` 的刷新语义 | 两条命令的 `--refresh` 三档同义：`true` 无条件先刷再查本地、`auto` 未命中才联网、`false` 绝不联网；`--title` 在 `true` 下降级为只查本地并标注 | accepted |
 

@@ -49,6 +49,8 @@ agent_created: true
 
 **两条命令的取数顺序不同，不要用一句话概括**：`search` 是「按新鲜度决定要不要联网刷新 → 查本地库」，所以 `--refresh false` 也能返回库里已有的东西；`lookup` 是「先查本地库，没命中才联网」。两条命令的结果**都来自本地库**。
 
+**但 `--refresh true` 在两条命令上是同一件事：先刷新，再查本地。** `lookup` 即使本地已命中也会刷一次——单实体 GET 免费，而它能补上「只以预印本记录入库、被引还是空」的条目。默认档要不要刷才是两者唯一的分歧：`search` 看检索式的新鲜度，`lookup` 只看本地有没有命中。
+
 **失败分支（比选对命令更容易出错的地方）：**
 
 - 本地没有 → 先怀疑检索式太窄，别急着联网；确认后 `search --refresh true`。
@@ -87,7 +89,7 @@ agent_created: true
 - `data.items[].abstract`：**按需出现**——`lookup` 固定带完整摘要；`search` 只有开了 `--abstract` 才带截断版（长度走 `config/search.toml`）。要引用摘要原文或照它翻译前，先读 `references/cli-reference.md` §1 与 §6：**它可能来自预印本稿，或者是 OpenAlex 倒排索引的还原产物**，载荷不带标记。
 - `data.network`：本次有没有发过请求；`data.cost`：`{usd, basis, requests}`（`basis` 是计费口径）。
 - `data.counts.failures[]`：部分源失败。**部分失败不算失败**：`ok` 仍为 true、退出码 0，如实汇报哪个源没成。
-- `data.degraded.reason`：本次降级了（余额不足只查本地，或新鲜度跳过联网）。**降级不是错误，不要重试。**
+- `data.degraded.reason`：本次降级了（余额不足只查本地、新鲜度跳过联网、或 `--title` 配 `--refresh true` 时只能查本地）。**降级不是错误，不要重试。**
 - `data.items[].dup_suspect = true`：疑似同一篇但**未合并**，引用时必须说明。
 - `data.items[].is_retracted = true`：撤稿，不要推荐。
 - **退出码**：`0` = 有产出，`1` = 没有产出（细分看 `error.code`）。**参数写错是例外**：argparse 直接退出，退出码 2、stderr 打 usage、没有 JSON 信封——别把「非 0 就一定有信封」当前提。

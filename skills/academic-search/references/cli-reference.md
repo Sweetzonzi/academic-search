@@ -83,15 +83,17 @@ scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limi
 |---|---|---|
 | `--doi` / `--arxiv` / `--title` | — | **必须给一个**（一个都不给 → `ok=false`、`error.code=invalid_args`）；同时给多个时优先级 `--doi` > `--arxiv` > `--title`（实测） |
 | `--limit N` | `20` | 只影响 `--title` 参与匹配的条目数 |
-| `--refresh auto\|true\|false` | `auto` | 见 §4；**只有本地未命中且给的是 `--doi` / `--arxiv` 时才联网**，`--title` 不联网 |
+| `--refresh auto\|true\|false` | `auto` | 见 §4。`true` = **先刷再查本地**（本地已命中也会去更新引用、撤稿标记与载体）；`auto` = 只有本地未命中才联网；`--title` 两种档下都不联网（标题不是标识，用不了单实体 GET），`true` 时会进 `degraded` 并说明 |
 
 ```powershell
-scripts/run.cmd lookup --arxiv 2610.18808 --refresh true    # 命中即返回，最省钱
+scripts/run.cmd lookup --arxiv 2610.18808 --refresh false   # 只读本地，零联网
+scripts/run.cmd lookup --arxiv 2506.18537 --refresh true    # 先刷再查：命中也会更新引用数（单实体 GET 免费）
 scripts/run.cmd lookup --doi 10.1109/mcse.2011.37 --refresh false
 scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh false
 ```
 
 - **`lookup` 固定带完整摘要**（`abstract` 字段，不截断、不需开关）：它本来就是「看确定的这一篇」，体积不构成顾虑，而判断一篇值不值得读正好需要摘要。`search` 找到候选后转 `lookup` 读摘要，是推荐的动线。
+- **`true` 与 `auto` 的区别只在「本地已命中时刷不刷」**：`auto` 命中即返回（零请求），`true` 命中也要刷一次。刷新本身**免费**——单实体 GET 的计费头是 `x-ratelimit-cost-usd: 0`（实测），所以这条差别不构成成本差异，只构成「引用数是不是最新的」。要修「库里只有 arXiv 记录、被引是 `null`」这类残缺，就用 `true`。
 - `--title` 走 FTS5 **短语**匹配（标题 + 摘要），取第一条命中，**不是模糊排序**。拼不准就改用 `search`。
 - 本地未命中且 `--refresh false` → `ok=false`、`error.code=not_found`（退出码 1）。换标识，或先 `search` 联网取。
 - `--doi` 入参会归一化，粘 `https://doi.org/...` 形式照样命中。
@@ -118,11 +120,13 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 
 | 取值 | 含义 |
 |---|---|
-| `auto`（默认） | 同一检索式在 `refresh.max_age_hours`（默认 24 小时）内查过就跳过联网，并在 `data.degraded.reason` 里说明 |
-| `true` | 强制联网 |
+| `auto`（默认） | **`search`**：同一检索式在 `refresh.max_age_hours`（默认 24 小时）内查过就跳过联网，并在 `data.degraded.reason` 里说明。**`lookup`**：本地标识未命中才联网（不看时间） |
+| `true` | **先刷新，再查库**——两条命令同义。`lookup` 在本地已命中时也会刷 |
 | `false` | **绝不联网**，只读本地库 |
 
-判据是**检索式**，不是全局时间：换个关键词就是另一次检索。只有**会改变远端请求**的参数参与判定——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--abstract` / `--in` 不参与，所以换个 `--limit` 仍算同一次检索、不会重新联网。只有**真正联网成功过**的那次才算「新鲜」，所以离线查询不会把 `auto` 锁死。
+`search` 的判据是**检索式**，不是全局时间：换个关键词就是另一次检索。只有**会改变远端请求**的参数参与判定——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--abstract` / `--in` 不参与，所以换个 `--limit` 仍算同一次检索、不会重新联网。只有**真正联网成功过**的那次才算「新鲜」，所以离线查询不会把 `auto` 锁死。
+
+`lookup` **不走这本新鲜度账**：它按标识取，`auto` 的判据只是「本地有没有命中」（口径见 `docs/决策/ADR-0065.md`）。所以同一篇 `lookup` 两次，两次都是零请求；想更新引用数就显式给 `true`。
 
 ---
 

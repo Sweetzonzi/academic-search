@@ -75,6 +75,25 @@ def _should_refresh(conn, spec_hash: str, mode: str, max_age_hours: int) -> bool
     return datetime.now(timezone.utc) - when > timedelta(hours=max_age_hours)
 
 
+def _refresh_lookup(mode: str, has_ident: bool, work_key: str | None) -> bool:
+    """`lookup` 的三档（ADR-0065 决策 1）：`true` 无条件先刷、`auto` 未命中才刷、`false` 不刷。
+
+    与 `search` 的区别只在 `auto` 的判据：`search` 按 `spec_hash` 看新鲜度，
+    `lookup` 按标识取、只看本地有没有命中（ADR-0065 决策 4 不做 per-work 账）。
+    """
+    if mode == "false" or not has_ident:
+        return False
+    if mode == "true":
+        return True
+    return work_key is None
+
+
+def _work_by_ident(conn, ident: tuple[str, str]) -> str | None:
+    """按 `(namespace, value)` 解析出 work——刷新前后各用一次，不夹带任何缓存。"""
+    hits = store.record_uids_by_ident(conn, ident[0], ident[1])
+    return store.member_work(conn, hits[0]) if hits else None
+
+
 def _resolve_names(names: Iterable[str], *, what: str) -> list[str]:
     """会名列表 → 载体 source id 列表；解析不到即报错（ADR-0060 决策 2）。"""
     ids, unknown = venues.resolve(names)
@@ -408,21 +427,25 @@ def run_lookup(
     try:
         outcome = Outcome()
         work_key = None
+        ident: tuple[str, str] | None = None
         if doi:
             doi = source_normalize_doi(doi) or doi
-        if doi:
-            hits = store.record_uids_by_ident(conn, "doi", doi.lower())
-            work_key = store.member_work(conn, hits[0]) if hits else None
+            ident = ("doi", doi.lower())
         elif arxiv_id:
-            hits = store.record_uids_by_ident(conn, "arxiv", arxiv_id.lower())
-            work_key = store.member_work(conn, hits[0]) if hits else None
+            ident = ("arxiv", arxiv_id.lower())
+
+        if ident is not None:
+            work_key = _work_by_ident(conn, ident)
         elif title:
             rids = store.search_fts(conn, '"' + title.replace('"', '""') + '"', limit * 5)
             work_key = store.member_work(conn, rids[0]) if rids else None
         else:
             raise envelope.EnvelopeError(envelope.INVALID_ARGS, "必须给 --doi / --arxiv / --title 之一")
 
-        if work_key is None and refresh != "false" and (doi or arxiv_id):
+        if refresh == "true" and ident is None:
+            outcome.degraded = {"reason": "标题不是标识，`--title` 用不了免费的单实体 GET；本次只查本地"}
+
+        if _refresh_lookup(refresh, ident is not None, work_key):
             client = client or make_client()
             outcome.network = True
             records: list[dict] = []
@@ -468,12 +491,20 @@ def run_lookup(
             outcome.cost_basis = client.cost_basis
             outcome.counts = {"new_candidates": 0, "dedup_blocked": 0,
                               "by_source": {}, "failures": failures}
+            # 先刷再查本地：刷新后重新按标识解析——归组与桥接管都可能换掉持有者
+            # （ADR-0065 决策 3），不拿 ingest 的返回值当结论。
+            work_key = _work_by_ident(conn, ident) or work_key
 
         if work_key is not None and not group.work_is_excluded(conn, work_key, blocked_venues):
             item = store.aggregate_work(conn, work_key)
             if item and not item["is_retracted"]:
                 outcome.items = [item]
         if not outcome.items and work_key is None:
+            if ident is None and refresh == "true":
+                raise envelope.EnvelopeError(
+                    envelope.NOT_FOUND,
+                    "标题未命中本地；`--title` 不联网（标题不是标识），要刷新请改用 --doi / --arxiv",
+                )
             raise envelope.EnvelopeError(envelope.NOT_FOUND, "标识未命中，且联网未取到")
         return outcome
     finally:

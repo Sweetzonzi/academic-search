@@ -274,6 +274,94 @@ def test_lookup_mailto_comes_from_config(root, capsys, monkeypatch):
     assert any("mailto=me%40example.com" in url for url in client.urls), client.urls
 
 
+def _insert_local_openalex_work(root, *, cited_by_count=None):
+    """本地已有这个 DOI 的记录，但引用信号是空的——模拟「只以 arXiv 记录进过库」。"""
+    conn = store.connect(config.db_path(root))
+    with store.write_tx(conn):
+        store.insert_record(conn, {
+            "record_uid": "u-oa", "source": "openalex", "source_id": "w2146292423",
+            "title": "The NumPy Array: A Structure for Efficient Numerical Computation",
+            "cited_by_count": cited_by_count,
+        })
+        store.upsert_ident(conn, "doi", "10.1109/mcse.2011.37", "u-oa")
+        store.create_work(conn, "wk-oa")
+        store.add_member(conn, "u-oa", "wk-oa", "primary")
+    conn.close()
+
+
+def _cited_by_count(root, record_uid):
+    conn = store.connect(config.db_path(root))
+    try:
+        row = conn.execute(
+            "SELECT cited_by_count FROM record WHERE record_uid = ?", (record_uid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["cited_by_count"]
+
+
+def test_lookup_refresh_true_repairs_signals_on_local_hit(root, monkeypatch):
+    """`--refresh true` = 先刷再查本地，即使本地已按标识命中（ADR-0065 决策 1）。"""
+    _insert_local_openalex_work(root)
+    assert _cited_by_count(root, "u-oa") is None
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    outcome = service.run_lookup(root, doi="10.1109/mcse.2011.37", refresh="true")
+    assert client.requests > 0, "命中也要刷"
+    assert outcome.network is True
+    assert _cited_by_count(root, "u-oa") == 10587, "引用信号被刷新写回"
+
+
+def test_lookup_refresh_auto_does_not_touch_the_network_on_local_hit(root, monkeypatch):
+    """默认档不产生任何额外请求——缺了才补（ADR-0065 决策 1 与决策 4）。"""
+    _insert_local_openalex_work(root)
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    outcome = service.run_lookup(root, doi="10.1109/mcse.2011.37", refresh="auto")
+    assert client.requests == 0
+    assert outcome.network is False
+    assert outcome.items[0]["work_key"] == "wk-oa"
+    assert _cited_by_count(root, "u-oa") is None, "不刷就不该动它"
+
+
+def test_lookup_refresh_false_never_goes_online_even_on_miss(root, monkeypatch):
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    with pytest.raises(service.envelope.EnvelopeError) as excinfo:
+        service.run_lookup(root, doi="10.9999/none", refresh="false")
+    assert client.requests == 0
+    assert excinfo.value.code == "not_found"
+
+
+def test_lookup_title_refresh_true_degrades_and_still_returns_local(root, capsys, monkeypatch):
+    """`--title` 没有标识、用不了免费的单实体 GET：只查本地并标注（ADR-0065 决策 2）。"""
+    monkeypatch.setattr(service, "make_client", lambda: FixtureClient())
+    _insert_abstract_work(root)
+    assert cli.main(["--root", str(root), "lookup", "--title", "Abstract demo",
+                     "--refresh", "true"]) == 0
+    env = envelope_of(capsys)
+    assert env["data"]["network"] is False
+    assert "只查本地" in env["data"]["degraded"]["reason"]
+    assert env["data"]["items"][0]["title"] == "Abstract demo"
+
+
+def test_lookup_title_refresh_true_miss_points_at_doi_and_arxiv(root, monkeypatch):
+    monkeypatch.setattr(service, "make_client", lambda: FixtureClient())
+    with pytest.raises(service.envelope.EnvelopeError) as excinfo:
+        service.run_lookup(root, title="nothing matches this", refresh="true")
+    assert excinfo.value.code == "not_found"
+    assert "--doi" in excinfo.value.message and "--arxiv" in excinfo.value.message
+
+
+def test_lookup_title_auto_is_not_a_degradation(root, monkeypatch):
+    """`auto` 下 `--title` 不联网是既定形状，不算降级——只有 `true` 才提示。"""
+    monkeypatch.setattr(service, "make_client", lambda: FixtureClient())
+    _insert_abstract_work(root)
+    outcome = service.run_lookup(root, title="Abstract demo", refresh="auto")
+    assert outcome.degraded is None
+    assert outcome.items[0]["title"] == "Abstract demo"
+
+
 def test_verify_empty_bytes(root, capsys):
     code = cli.main(["--root", str(root), "verify", "--sample", "0"])
     assert code == 0
