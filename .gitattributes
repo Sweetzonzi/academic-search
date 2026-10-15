@@ -3,6 +3,12 @@
 # 各机器 diff 会出现整文件差异，且 Markdown 里 ^...$ 之类的正则容易被 \r 破坏。
 * text=auto eol=lf
 
+# Windows 批处理必须是 CRLF：cmd.exe 对 LF-only 的 .cmd 会错切行
+# （实测：rem 注释被切开、if (...) 块整体失效、set "X=..." 变残留字面量），
+# 这是 eol=lf 的唯一例外。仓库里唯一的 .cmd 是 skill 的 launcher。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
 # 二进制不要碰
 *.png binary
 *.jpg binary
