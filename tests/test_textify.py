@@ -110,7 +110,9 @@ def _media(tmp_path):
     return media
 
 
-def test_normalise_figures_rewrites(tmp_path):
+def test_normalise_figures_rewrites(tmp_path, monkeypatch):
+    # 这里要测的是"没有渲染器"这一档，所以把 PyMuPDF 也按缺席处理
+    monkeypatch.setattr(textify, "pymupdf_version", lambda: None)
     media = _media(tmp_path)
     fig_dir = tmp_path / "figures"
     text = (

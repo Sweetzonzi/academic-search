@@ -3,17 +3,20 @@
 契约：docs/02-设计说明书.md §4.10、[ADR-0056](../决策/ADR-0056.md) 决策 3、
 经验数字见 docs/实验/EX-2026-10-14-文本化.md。spike 在 experiments/m1.5/05_textify.py。
 
-本模块只用标准库（pandoc / pdftocairo 是外部可执行文件，缺失即降级）；
+本模块只用标准库（pandoc / pdftocairo 是外部可执行文件，PyMuPDF 可选，缺失即降级）；
 不改库、不拼 bytes/ 路径（那是 paths.py 与 service 的事）。
 """
 
 from __future__ import annotations
 
 import glob as _glob
+import gzip
+import io
 import os
 import re
 import shutil
 import subprocess
+import tarfile
 from html.parser import HTMLParser
 
 #: pandoc 输出方言：固定值；gfm 会把行间公式变成代码块，markdown 会丢表格（EX §4.2）。
@@ -85,8 +88,51 @@ def pandoc_version(pandoc: str) -> str:
     return "unknown"
 
 
-def converter_version(pandoc: str) -> str:
-    return pandoc_version(pandoc) + "|" + WRITER
+def _pdftocairo_version(tool: str) -> str | None:
+    """取 poppler 版本（pdftocairo -v）；拿不到就用路径里的版本段兜底（ADR-0056 决策 3）。"""
+    try:
+        proc = subprocess.run([tool, "-v"], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        proc = None
+    if proc is not None:
+        text = ((proc.stdout or b"") + (proc.stderr or b"")).decode("utf-8", "replace")
+        match = re.search(r"[Vv]ersion\s+([0-9][0-9A-Za-z._-]*)", text)
+        if match:
+            return match.group(1)
+    for part in reversed(os.path.normpath(tool).split(os.sep)):
+        if re.fullmatch(r"\d{4}|\d+\.\d+(?:\.\d+)*", part):
+            return part
+    return None
+
+
+def pymupdf_version() -> str | None:
+    """PyMuPDF 版本；没装返回 None（ADR-0056 决策 3 的第二档渲染器）。"""
+    try:
+        import fitz  # noqa: PLC0415 - 只有 pdftocairo 缺席时才值得导入
+    except Exception:
+        return None
+    direct = getattr(fitz, "__version__", None) or getattr(fitz, "VersionBind", None)
+    if isinstance(direct, str) and direct:
+        return direct
+    version = getattr(fitz, "version", None)
+    if isinstance(version, (list, tuple)) and version and isinstance(version[0], (list, tuple)):
+        return str(version[0][0])
+    return "unknown"
+
+
+def renderer_id(tool: str | None) -> str:
+    """图渲染器标识，进 converter_version；200 dpi 不是独立参数（ADR-0056 决策 3）。"""
+    if tool:
+        return "pdftocairo@" + (_pdftocairo_version(tool) or "unknown")
+    version = pymupdf_version()
+    return ("pymupdf@" + version) if version else "none"
+
+
+def converter_version(pandoc: str, renderer: str | None = None) -> str:
+    """pandoc 版本 + 输出方言 + 图渲染器标识；任一变化即触发重转（ADR-0016、ADR-0056）。"""
+    if renderer is None:
+        renderer = renderer_id(find_pdftocairo())
+    return "|".join([pandoc_version(pandoc), WRITER, renderer])
 
 
 # --------------------------------------------------------------------------
@@ -135,6 +181,79 @@ def find_root_tex(directory: str, arxiv_id: str | None = None) -> str:
 def find_bibliography(directory: str) -> str | None:
     matches = sorted(_glob.glob(os.path.join(directory, "*.bib")))
     return matches[0] if matches else None
+
+
+# --------------------------------------------------------------------------
+# 取件：e-print 解包
+# --------------------------------------------------------------------------
+
+#: 解包防呆上限（EX §6.2：单篇源码 158–693 KB，留两个数量级余量）。
+EPRINT_MAX_UNPACKED = 256 * 1024 * 1024
+EPRINT_MAX_MEMBERS = 5000
+
+
+def _looks_like_tar(raw: bytes) -> bool:
+    # tar 的 magic 在偏移 257，不看开头
+    return len(raw) > 512 and raw[257:262] == b"ustar"
+
+
+def _extract_tar(raw: bytes, dest_dir: str) -> None:
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+            members = archive.getmembers()
+            if len(members) > EPRINT_MAX_MEMBERS:
+                raise TextifyError("unpack_failed", "e-print 成员数超过上限：" + str(len(members)))
+            total = sum(m.size for m in members if m.isfile())
+            if total > EPRINT_MAX_UNPACKED:
+                raise TextifyError("unpack_failed", "e-print 解压体积超过上限")
+            # data filter 挡绝对路径、.. 与链接（Python 3.12 标准库自带）
+            archive.extractall(dest_dir, filter="data")
+    except tarfile.TarError as exc:
+        raise TextifyError("unpack_failed", "tar 解包失败：" + str(exc)) from exc
+
+
+def list_files(directory: str) -> list[str]:
+    """目录下所有文件的相对路径（POSIX 分隔符），按名排序。"""
+    found: list[str] = []
+    for base, _dirs, names in os.walk(directory):
+        for name in names:
+            path = os.path.join(base, name)
+            found.append(os.path.relpath(path, directory).replace("\\", "/"))
+    return sorted(found)
+
+
+def _hinted(name_hint: str | None, suffix: str) -> str:
+    stem = (name_hint or "main").strip() or "main"
+    return stem if stem.lower().endswith(suffix) else stem + suffix
+
+
+def _write(name: str, dest_dir: str, data: bytes) -> str:
+    with open(os.path.join(dest_dir, name), "wb") as handle:
+        handle.write(data)
+    return name
+
+
+def unpack_eprint(data: bytes, dest_dir: str, *, name_hint: str | None = None) -> dict:
+    """e-print 原始字节 → 解包目录；返回 {kind, files}。
+
+    kind 取 tarball / gzip / tex / pdf / unknown；pdf 表示这条路没有 LaTeX 源码。
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+    if data[:2] == b"\x1f\x8b":
+        try:
+            raw = gzip.decompress(data)
+        except (OSError, EOFError) as exc:
+            raise TextifyError("unpack_failed", "gzip 解压失败：" + str(exc)) from exc
+        if _looks_like_tar(raw):
+            _extract_tar(raw, dest_dir)
+            return {"kind": "tarball", "files": list_files(dest_dir)}
+        suffix = ".tex" if b"\\documentclass" in raw[:200000] else ".txt"
+        return {"kind": "gzip", "files": [_write(_hinted(name_hint, suffix), dest_dir, raw)]}
+    if data[:5] == b"%PDF-":
+        return {"kind": "pdf", "files": [_write(_hinted(name_hint, ".pdf"), dest_dir, data)]}
+    if data.lstrip()[:1] == b"%":  # 以 TeX 注释开头 = 纯 .tex
+        return {"kind": "tex", "files": [_write(_hinted(name_hint, ".tex"), dest_dir, data)]}
+    return {"kind": "unknown", "files": [_write(_hinted(name_hint, ".bin"), dest_dir, data)]}
 
 
 # --------------------------------------------------------------------------
@@ -286,6 +405,21 @@ def pdf_to_png(pdf: str, stem: str, pdftocairo: str | None, dpi: int = PDF_RENDE
     return None
 
 
+def pdf_to_png_mupdf(pdf: str, stem: str, dpi: int = PDF_RENDER_DPI) -> str | None:
+    """第二档渲染器：PyMuPDF（ADR-0056 决策 3）；没装或渲染失败返回 None。"""
+    try:
+        import fitz  # noqa: PLC0415
+    except Exception:
+        return None
+    try:
+        with fitz.open(pdf) as document:
+            document.load_page(0).get_pixmap(dpi=dpi).save(stem + ".png")
+    except Exception:
+        return None
+    candidate = stem + ".png"
+    return candidate if os.path.exists(candidate) else None
+
+
 def normalise_figures(
     text: str, media_dir: str, fig_dir: str, pdftocairo: str | None = None
 ) -> tuple[str, dict, dict]:
@@ -311,16 +445,18 @@ def normalise_figures(
         figmap.setdefault(os.path.basename(raw), "figures/" + base)
         if raw.lower().endswith(".pdf"):
             stem = os.path.join(fig_dir, os.path.splitext(base)[0])
-            if not pdftocairo:
-                stats["render_skipped"] += 1
-            else:
-                rendered = pdf_to_png(raw, stem, pdftocairo)
-                if rendered:
-                    stats["rendered_png"] += 1
-                    rel = "figures/" + os.path.basename(rendered)
-                    figmap[os.path.basename(raw)] = rel
-                    return rel
+            rendered = pdf_to_png(raw, stem, pdftocairo)
+            if not rendered:
+                rendered = pdf_to_png_mupdf(raw, stem)
+            if rendered:
+                stats["rendered_png"] += 1
+                rel = "figures/" + os.path.basename(rendered)
+                figmap[os.path.basename(raw)] = rel
+                return rel
+            if pdftocairo or pymupdf_version():
                 stats["render_failed"] += 1
+            else:
+                stats["render_skipped"] += 1
         destination = os.path.join(fig_dir, base)
         if not os.path.exists(destination):
             shutil.copy2(raw, destination)
@@ -692,19 +828,19 @@ def normalise_pandoc_output(
 
 
 def run_pandoc(
-    root_tex: str, out_media_dir: str, *, pandoc: str, bibliography: str | None = None,
-    source_dir: str | None = None, timeout: int = 300,
+    source_file: str, out_media_dir: str, *, pandoc: str, reader: str = "latex",
+    bibliography: str | None = None, source_dir: str | None = None, timeout: int = 300,
 ) -> str:
-    """调 pandoc 产出 Markdown 原文；失败抛 TextifyError。"""
+    """调 pandoc 产出 Markdown 原文；reader 取 latex（路线 A）或 html（路线 B）。"""
     command = [
-        pandoc, os.path.basename(root_tex), "-f", "latex", "-t", WRITER, "--wrap=none",
+        pandoc, os.path.basename(source_file), "-f", reader, "-t", WRITER, "--wrap=none",
         "--extract-media=" + out_media_dir,
     ]
     if bibliography:
         command += ["--citeproc", "--bibliography=" + os.path.basename(bibliography)]
     try:
         proc = subprocess.run(
-            command, cwd=source_dir or os.path.dirname(root_tex),
+            command, cwd=source_dir or os.path.dirname(source_file),
             capture_output=True, timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as exc:

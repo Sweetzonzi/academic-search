@@ -9,9 +9,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Iterable
 
-from . import config, envelope, group, paths, store
+from . import config, envelope, group, htmlclean, paths, store, textify
 from .sources import SearchSpec, SourceError
 from .sources import arxiv as arxiv_source
 from .sources import crossref as crossref_source
@@ -392,3 +393,206 @@ def run_lookup(
         return outcome
     finally:
         conn.close()
+
+# --------------------------------------------------------------------------
+# textify：取原生文本源 → 转换（M1.5；落盘与 artifact 登记归 M2）
+# --------------------------------------------------------------------------
+
+TEXTIFY_SOURCES = ("auto", "latex", "html")
+ROLE_RANK = {"primary": 0, "preprint": 1, "published": 2, "duplicate": 3}
+
+#: 单张图件的下载上限（正文整体由 fetch_html 自己的上限兜）。
+HTML_MEDIA_MAX_BYTES = 8 * 1024 * 1024
+
+
+@dataclass
+class TextifyOutcome:
+    """一次文本化的产物。**不写库、不落 bytes/ 与 works/**——那是 M2 的全文通道。
+
+    本阶段全部输出写在调用方给的 work_dir 里，markdown 直接带回调用方，
+    由调用方（M2 的 CLI / 本阶段的测试）决定写到哪儿。
+    """
+
+    work_key: str = ""
+    record_uid: str = ""
+    source: str = ""
+    source_url: str = ""
+    converter: str = "pandoc"
+    converter_version: str = ""
+    markdown: str = ""
+    figures: list = field(default_factory=list)
+    stats: dict = field(default_factory=dict)
+    attempts: list = field(default_factory=list)
+    work_dir: str = ""
+    network: bool = True
+    requests: int = 0
+    cost_usd: float = 0.0
+    cost_basis: str = ""
+
+
+def _arxiv_ids(conn, record_uid: str) -> list:
+    return [row["value"] for row in store.idents_of(conn, record_uid) if row["ns"] == "arxiv"]
+
+
+def _pick_record(conn, work_key: str, arxiv_id: str | None = None):
+    """选代表记录：能出 arXiv 源的成员里按 role 排；返回 (member_row, arxiv_id)。"""
+    if not store.work_exists(conn, work_key):
+        raise envelope.EnvelopeError(envelope.NOT_FOUND, "没有这个 work_key：" + work_key)
+    members = store.member_records(conn, work_key)
+    if not members:
+        raise envelope.EnvelopeError(envelope.NOT_FOUND, "work 没有成员记录：" + work_key)
+    if arxiv_id:
+        wanted = arxiv_id.lower()
+        for member in members:
+            if wanted in [value.lower() for value in _arxiv_ids(conn, member["record_uid"])]:
+                return member, arxiv_id
+        raise envelope.EnvelopeError(envelope.NOT_FOUND, "该 work 里没有这条 arXiv id：" + arxiv_id)
+    ordered = sorted(members, key=lambda m: (ROLE_RANK.get(m["role"], 9), m["record_uid"]))
+    for member in ordered:
+        values = _arxiv_ids(conn, member["record_uid"])
+        if values:
+            return member, values[0]
+    raise envelope.EnvelopeError(
+        envelope.SOURCE_ERROR,
+        "该 work 没有 arXiv 记录；初版只有 arXiv LaTeX 源码与 arXiv HTML 两条路线（REQ R3）",
+    )
+
+
+def _convert_latex(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str | None):
+    """路线 A：e-print → 解包 → 主 .tex → pandoc → 归一化。"""
+    blob = arxiv_source.fetch_eprint(client, arxiv_id)
+    source_dir = str(base / "src")
+    info = textify.unpack_eprint(blob, source_dir, name_hint=arxiv_id)
+    if info["kind"] == "pdf":
+        raise textify.TextifyError("eprint_pdf_only", "e-print 只有 PDF，没有 LaTeX 源码")
+    root_tex = textify.find_root_tex(source_dir, arxiv_id=arxiv_id)
+    with open(root_tex, "r", encoding="utf-8", errors="replace") as handle:
+        tex_text = handle.read()
+    media = str(base / "media")
+    raw = textify.run_pandoc(
+        root_tex, media, pandoc=tool, reader="latex",
+        bibliography=textify.find_bibliography(source_dir),
+    )
+    return textify.normalise_pandoc_output(
+        raw, media, str(base / "figures"), tex_text=tex_text, pdftocairo=pdftocairo
+    )
+
+
+def _convert_html(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str | None):
+    """路线 B：/html/<id> → LaTeXML 清洗 → 图件本地化 → pandoc → 归一化。"""
+    cleaned, clean_stats = htmlclean.clean_latexml(arxiv_source.fetch_html(client, arxiv_id))
+    media = base / "html"
+    media.mkdir(parents=True, exist_ok=True)
+    entries = htmlclean.collect_media(cleaned, base_url=arxiv_source.html_url(arxiv_id))
+    mapping: dict = {}
+    missing = 0
+    for index, entry in enumerate(entries, start=1):
+        name = htmlclean.media_name(entry, index)
+        try:
+            if entry["kind"] == "inline":
+                (media / name).write_bytes(entry["payload"])
+            else:
+                blob = client.get_bytes(entry["url"], source="arxiv", max_bytes=HTML_MEDIA_MAX_BYTES)
+                if blob.status != 200:
+                    missing += 1
+                    continue
+                (media / name).write_bytes(blob.content)
+        except SourceError:
+            missing += 1
+            continue
+        mapping[entry["src"]] = name
+    source_file = str(media / "paper.html")
+    with open(source_file, "w", encoding="utf-8") as handle:
+        handle.write(htmlclean.rewrite_media(cleaned, mapping))
+    markdown, stats = textify.normalise_pandoc_output(
+        textify.run_pandoc(source_file, str(media), pandoc=tool, reader="html"),
+        str(media), str(base / "figures"), pdftocairo=pdftocairo,
+    )
+    clean_stats["media_total"] = len(entries)
+    clean_stats["media_missing"] = missing
+    stats["html"] = clean_stats
+    return markdown, stats
+
+
+def run_textify(
+    root,
+    work_key: str,
+    *,
+    source: str = "auto",
+    work_dir: str,
+    client=None,
+    pandoc: str | None = None,
+    pdftocairo: str | None = None,
+    arxiv_id: str | None = None,
+) -> TextifyOutcome:
+    """取原生文本源并转 Markdown；全程只写 work_dir。
+
+    契约：docs/03-接口契约.md 的 textify 行、ADR-0056 决策 3、EX-2026-10-14-文本化 §7。
+    auto = 先 LaTeX 源码、失败再 HTML；latex / html 指定即不回退。
+    **本阶段不落 bytes/、不投影 works/、不登记 artifact、不做缓存命中**——那是 M2 的
+    「全文按需取用通道」。
+    """
+    if source not in TEXTIFY_SOURCES:
+        raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知 --source：" + str(source))
+    root = str(root)
+    base = Path(work_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    conn = store.connect(config.db_path(root))
+    try:
+        work_key = store.resolve_work(conn, work_key)
+        member, arxiv_id = _pick_record(conn, work_key, arxiv_id=arxiv_id)
+        outcome = TextifyOutcome(
+            work_key=work_key, record_uid=member["record_uid"], work_dir=str(base)
+        )
+        tool = pandoc or textify.find_pandoc(root)
+        if not tool:
+            raise envelope.EnvelopeError(
+                envelope.SOURCE_ERROR,
+                "没有 pandoc：设 ACADEMIC_SEARCH_PANDOC、放 vendor/pandoc/ 或装到 PATH（DEV-CONV §4）",
+            )
+        renderer = pdftocairo if pdftocairo is not None else textify.find_pdftocairo(root)
+        client = client or make_client()
+        attempts: list = []
+        plan = ["latex", "html"] if source == "auto" else [source]
+        for index, route in enumerate(plan):
+            try:
+                if route == "latex":
+                    markdown, stats = _convert_latex(client, arxiv_id, base, tool, renderer)
+                    url = arxiv_source.eprint_url(arxiv_id)
+                else:
+                    markdown, stats = _convert_html(client, arxiv_id, base, tool, renderer)
+                    url = arxiv_source.html_url(arxiv_id)
+            except (textify.TextifyError, SourceError) as exc:
+                attempts.append({
+                    "source": route,
+                    "reason": getattr(exc, "reason", str(exc)),
+                    "message": str(exc),
+                })
+                if index + 1 == len(plan):
+                    detail = "; ".join(a["source"] + "=" + a["reason"] for a in attempts)
+                    raise envelope.EnvelopeError(
+                        envelope.SOURCE_ERROR, "文本化失败：" + detail
+                    ) from exc
+                continue
+            outcome.source = "arxiv_latex" if route == "latex" else "arxiv_html"
+            outcome.source_url = url
+            outcome.markdown = markdown
+            outcome.stats = stats
+            outcome.converter_version = textify.converter_version(
+                tool, textify.renderer_id(renderer)
+            )
+            break
+        outcome.attempts = attempts
+        outcome.requests = client.requests
+        outcome.cost_usd = client.cost_usd
+        outcome.cost_basis = client.cost_basis
+        figures_dir = base / "figures"
+        if figures_dir.is_dir():
+            outcome.figures = [
+                {"name": path.name, "path": str(path), "bytes": path.stat().st_size}
+                for path in sorted(figures_dir.iterdir()) if path.is_file()
+            ]
+        return outcome
+    finally:
+        conn.close()
+

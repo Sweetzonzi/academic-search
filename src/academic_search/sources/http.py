@@ -25,6 +25,16 @@ class HttpResponse:
         return json.loads(self.text)
 
 
+@dataclass
+class HttpBytesResponse:
+    """原始字节响应；二进制下载与状态码探测用它（HttpResponse 装的是解码后的文本）。"""
+
+    url: str
+    status: int
+    content: bytes
+    headers: dict = field(default_factory=dict)
+
+
 class HttpClient:
     """带最小间隔的同步客户端；每次请求记录花费头。"""
 
@@ -40,19 +50,38 @@ class HttpClient:
         self.rate_remaining_usd: float | None = None
 
     def get(self, url: str, *, headers: dict | None = None, source: str = "") -> HttpResponse:
+        raw = self.get_bytes(url, headers=headers, source=source)
+        return HttpResponse(
+            raw.url, raw.status, raw.content.decode("utf-8", errors="replace"), raw.headers
+        )
+
+    def get_bytes(self, url: str, *, headers: dict | None = None, source: str = "",
+                  raise_on_error: bool = True,
+                  max_bytes: int | None = None) -> HttpBytesResponse:
+        """取原始字节；e-print 二进制下载与 HTML 可用性探测共用这一条通道。
+
+        raise_on_error=False 时把 4xx/5xx 交回调用方判断（探测要读状态码）；
+        max_bytes 是防呆上限，超出即报错而不是截断（截断的 tar.gz 只会变成更贵的错）。
+        """
         self._throttle(source)
         request = urllib.request.Request(url, headers=dict(headers or {}))
         request.add_header("User-Agent", self.user_agent)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                body = response.read().decode("utf-8", errors="replace")
-                result = HttpResponse(url, response.status, body, dict(response.headers))
+                content = response.read() if max_bytes is None else response.read(max_bytes + 1)
+                if max_bytes is not None and len(content) > max_bytes:
+                    raise SourceError(
+                        source or "http", "响应超过上限 " + str(max_bytes) + " 字节：" + url, False
+                    )
+                result = HttpBytesResponse(url, response.status, content, dict(response.headers))
         except urllib.error.HTTPError as exc:
-            raise self._classify(source, exc) from exc
+            if raise_on_error:
+                raise self._classify(source, exc) from exc
+            result = HttpBytesResponse(url, exc.code, exc.read() or b"", dict(exc.headers or {}))
         except urllib.error.URLError as exc:
             raise SourceError(source or "http", "网络不可达：" + str(exc.reason), True) from exc
         self.requests += 1
-        self._record_cost(result)
+        self._record_cost(result.headers)
         return result
 
     def _throttle(self, source: str) -> None:
@@ -65,8 +94,8 @@ class HttpClient:
             time.sleep(interval - (now - last))
         self._last[source] = time.monotonic()
 
-    def _record_cost(self, response: HttpResponse) -> None:
-        headers = {k.lower(): v for k, v in response.headers.items()}
+    def _record_cost(self, raw_headers: dict) -> None:
+        headers = {k.lower(): v for k, v in raw_headers.items()}
         raw = headers.get("x-ratelimit-cost-usd")
         if raw:
             try:
