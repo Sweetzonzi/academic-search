@@ -11,13 +11,13 @@ title: "设计决策索引"
 
 | 编号 | 标题 | 简述 | 状态 |
 |---|---|---|---|
-| [ADR-0001](ADR-0001.md) | 三层存储：Zotero + sidecar + blob 目录 | Zotero 装条目资产，sidecar 装工作台与派生数据，blob 装文本与图件 | accepted |
+| [ADR-0001](ADR-0001.md) | 三层存储：Zotero + sidecar + 字节层 | Zotero 装条目资产，sidecar 装工作台与派生数据，字节层装文本与图件 | accepted |
 | [ADR-0002](ADR-0002.md) | 确定性 CLI + 薄 SKILL.md | 分页/限流/去重/幂等交给代码，LLM 只做查询扩展与总结；不用常驻 MCP | accepted |
 | [ADR-0003](ADR-0003.md) | 作品身份：确定性派生 | `record_uid` 由 `(source, source_id)` 派生，`work_key` 取首领记录，第三方 ID 只作别名 | accepted |
 | [ADR-0004](ADR-0004.md) | 中文摘要写回用 child note | 不改 Abstract 字段、不塞 Extra | accepted |
 | [ADR-0005](ADR-0005.md) | 调度器中立 | 采集命令无头、幂等、可观测；用哪个调度器由使用者定 | accepted |
 | [ADR-0006](ADR-0006.md) | 默认不下载 PDF | 按需获取，且只取 OA 版本 | accepted |
-| [ADR-0007](ADR-0007.md) | 检索入口唯一 | `search` / `lookup --scope auto`，内部固定「本地 → 候选池 → 联网」三段 | accepted |
+| [ADR-0007](ADR-0007.md) | 检索入口唯一 | `search` / `lookup`，内部固定「本地 → 候选池 → 联网」三段 | accepted |
 | [ADR-0008](ADR-0008.md) | 权威归属 | Zotero 管「我的库」，sidecar 管「领域语料 + 派生数据」，单向 `promote` | accepted |
 | [ADR-0009](ADR-0009.md) | 「我的库」抽象为 LibraryBackend | Zotero / File / None 三种实现，Zotero 只是默认 | accepted |
 | [ADR-0010](ADR-0010.md) | 全文文本化 | 原生文本优先 + 随附便携 pandoc + 图随文保存 + 锚点注入 | accepted |
@@ -30,7 +30,7 @@ title: "设计决策索引"
 | [ADR-0012](ADR-0012.md) | 课题组协作模型 | 同一套工具、各人画像独立；不建共享库，靠导出交接 | accepted |
 | [ADR-0013](ADR-0013.md) | 无 Zotero 也能跑 | 做 `LibraryBackend` 抽象 | accepted |
 | [ADR-0014](ADR-0014.md) | 启用 arXiv LaTeX 源码路线 | `/e-print/<id>` → pandoc → Markdown | accepted |
-| [ADR-0015](ADR-0015.md) | 图件随文保存 | 图件落 `blobs/<work_key>/figures/`，字节实体进 `store/<sha256>` | accepted |
+| [ADR-0015](ADR-0015.md) | 图件随文保存 | 图件落 `works/<work_key>/figures/`，字节实体进 `bytes/<sha256>` | accepted |
 | [ADR-0016](ADR-0016.md) | 转换器依赖 | 随工具附便携 pandoc，版本进缓存键 | accepted |
 
 ## 文本化与身份 spike 决策
@@ -47,4 +47,26 @@ title: "设计决策索引"
 | [ADR-0024](ADR-0024.md) | 多来源并存策略 | 统统存为记录、各自保留；派生按 `content_hash` 共享 | accepted |
 | [ADR-0025](ADR-0025.md) | 去重判据 | L0 强标识 > L1 显式桥 > L2 title+作者+年份 > L3 人工；`title_key` 不进唯一约束 | accepted |
 | [ADR-0026](ADR-0026.md) | 分组维护 | 常走 OpenAlex 单实体 GET（免费）取桥；自行保留 `merged_into` 映射 | accepted |
+
+## 工作台与范围决策
+
+| 编号 | 标题 | 简述 | 状态 |
+|---|---|---|---|
+| [ADR-0027](ADR-0027.md) | 专题的组织方式 | 画像里的具名查询 + 候选池 tag，不建独立实体 | accepted |
+| [ADR-0028](ADR-0028.md) | 报告分「新发表 / 新发现」 | 首次入池语义收敛到 `run_id`；发表时间不进幂等键 | accepted |
+| [ADR-0029](ADR-0029.md) | 全文字节进 `bytes/` | sidecar 只存指针；v1 的 FTS5 不覆盖正文 | accepted |
+| [ADR-0030](ADR-0030.md) | 确认按动作分级 | 写 Zotero 需确认，翻译与文本化全自动 | accepted |
+| [ADR-0031](ADR-0031.md) | 综述取材在内、撰写与聚合产物在 v1 外 | v1 只做领域覆盖清单 | accepted |
+| [ADR-0032](ADR-0032.md) | 初版范围 | 初版是「LLM 检索缓存层」，不接 Zotero；桥接整体顺延到 M5 | accepted |
+| [ADR-0033](ADR-0033.md) | 字节层两个坐标 | `bytes/`（内容）与 `works/`（作品）；`works/` 目录名用 `work_key` | accepted |
+| [ADR-0034](ADR-0034.md) | 投影用硬链接 | `works/` 硬链接到 `bytes/`，`bytes/` 里的文件设只读 | accepted |
+| [ADR-0035](ADR-0035.md) | 全文按需取 | 定时 run 不取全文；「要这篇」= `textify` 产物落盘，不落状态 | accepted |
+| [ADR-0036](ADR-0036.md) | 正文检索走文件扫描 | `--in body` 扫 `works/`；FTS5 只管标题/摘要/翻译 | accepted |
+| [ADR-0037](ADR-0037.md) | CLI 不调 LLM | 翻译与摘要走 `digest list/put`，由对话模型经子 agent 产出 | accepted |
+| [ADR-0038](ADR-0038.md) | 调度不进工具 | `sync` 只保证无头、幂等、报告结构化；频率由用户配 | accepted |
+| [ADR-0039](ADR-0039.md) | 画像 agent 写、CLI 只读 | `profile show/check/scaffold`；未配置时先出草稿再确认 | accepted |
+| [ADR-0040](ADR-0040.md) | 配置集中在 `config/` | 一份配置一个固定文件名；画像只有一份；密钥不进配置 | accepted |
+| [ADR-0041](ADR-0041.md) | 临时检索与具名查询并列 | `--all-of`／`--any-of` 当场给检索式；结果照样落候选池 | accepted |
+| [ADR-0042](ADR-0042.md) | v1 只支持英文检索 | FTS5 用默认分词器；中文翻译不进索引，只给人读 | accepted |
+| [ADR-0043](ADR-0043.md) | 检索只有一条路径 | 刷新（可选）→ 查库 → 返回；`--refresh auto\|true\|false`，判据按 `spec_hash` | accepted |
 

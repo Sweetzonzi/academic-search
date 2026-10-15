@@ -1,13 +1,13 @@
 ---
-doc-id: RUN-M0
+doc-id: RUN-M5
 kind: runbook
 status: draft
-title: M0：Zotero 升级与本地写入授权
+title: "M5：Zotero 桥接（升级、授权、写读删）"
 ---
 
-# M0：Zotero 升级与本地写入授权
+# M5：Zotero 桥接（升级、授权、写读删）
 
-> 操作手册。前置：Zotero 未运行、库从未同步。
+> 操作手册。前置：Zotero 未运行、库从未同步。初版（M0–M4）不接 Zotero，本手册在初版稳定后执行（[ADR-0032](../决策/ADR-0032.md)）。
 
 **前置**：Zotero 当前未运行（已确认），库从未同步。
 
@@ -23,17 +23,12 @@ python -c "import sqlite3;c=sqlite3.connect(r'D:\ZoteroLib-backup-20261014\zoter
 ```
 **记录基线**：顶层条目 5、附件 6、`fulltextItems` 6、`databaseSchema=37`、`collections=1`、`tags=3`。
 
-## 2. 申请 OpenAlex 免费 API key
-
-- 入口：openalex.org 账号设置中的 API key（具体页面以官方当前指引为准，本文未逐步核实）。
-- 校验：带 key 请求一次 `filter` 查询，确认 `x-ratelimit-limit-usd` 从 `0.1` 提升到约 `1`。
-
-## 3. 升级 Zotero 到 10.0.6
+## 2. 升级 Zotero 到 10.0.6
 
 - 覆盖安装后**逐项比对基线**：`databaseSchema`、条目数、附件数、`fulltextItems` 数、PDF 能否打开、标签与 collection 是否完好。
 - 若任何一项不符 → **停止后续步骤**，用备份回退（升级是单向的，回退依靠备份而非降级安装）。
 
-## 4. 授权本地写入
+## 3. 授权本地写入
 
 ```powershell
 # 1) 启动 Zotero，确认设置中已勾选「允许本机其他应用与 Zotero 通信」
@@ -49,7 +44,7 @@ curl.exe -X POST http://127.0.0.1:23119/api/local/authorize `
 ```
 注意：默认是**单次 key**（首个成功写请求即消耗），只有 "Always Allow" 才可复用；每分钟最多 5 次弹窗。
 
-## 5. 创建专用 collection 并做写入/读取/删除测试
+## 4. 创建专用 collection 并做写入/读取/删除测试
 
 ```powershell
 # 1) 创建 collection "Agent Inbox"（POST /api/users/0/collections）
@@ -62,20 +57,17 @@ curl.exe -X POST http://127.0.0.1:23119/api/local/authorize `
 ```
 **同时验证**：写请求带 `If-Unmodified-Since-Version` 的语义；删掉 key 后写请求应返回 `401`（用于确认授权确实生效）。
 
-## 6. 回滚验证
+## 5. 回滚验证
 
 - 按 `itemKey` 删除测试条目后，确认 `GET /api/users/0/items?q=academic-search spike` 无结果。
 - 在 sidecar 侧记录 `run_id` 与该条目的对应关系，验证"按 run 回滚"的查询路径可跑通。
 
-## 7. 增量与回退通道（M0b）
+## 6. 连接器回退通道
 
 ```powershell
-# 增量：额度充足时分别用无 key / 有 key 请求
-curl.exe "https://api.openalex.org/works?filter=from_updated_date:2026-10-13&per-page=1"
-# 回退：Zotero 未升级时，用连接器通道导入一条 RIS/BibTeX（需 Zotero 运行且选中目标集合）
+# Zotero 未升级时，用连接器通道导入一条 RIS/BibTeX（需 Zotero 运行且选中目标集合，回答 Q3）
 curl.exe -X POST "http://127.0.0.1:23119/connector/import" `
   -H "Content-Type: text/plain" --data-binary "@sample.ris"
 ```
 
 ---
-

@@ -45,7 +45,7 @@ title: Zotero 能力边界
 | text/plain | ✅（带 charset 时） | ❌ | `fulltext.js:559-567` |
 | **Markdown `.md`** | **未验证**（非一等类型，可能落入 text/plain 分支也可能被跳过） | ❌ | 无对应的 MIME 处理分支 |
 
-**含义**：想让文本版论文在 Zotero 里**被搜到、被标注**，附件应当是 **HTML 快照**；Markdown 属于"给 LLM 读"的形态，放 sidecar 的 blob 目录更合适。
+**含义**：想让文本版论文在 Zotero 里**被搜到、被标注**，附件应当是 **HTML 快照**；Markdown 属于"给 LLM 读"的形态，放 sidecar 的字节层（`works/` 投影）更合适。
 
 ## 3. Extra 字段的真实行为
 

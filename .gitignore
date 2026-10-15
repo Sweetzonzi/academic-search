@@ -1,7 +1,10 @@
 # 派生数据与本地状态：删掉可重建（见 README「目录约定」）
 data/
-store/
-blobs/
+bytes/
+works/
+
+# 用户配置：唯一不可重建（见 docs/使用/配置.md）——各人一份，不进版本库
+config/
 
 # Python
 __pycache__/

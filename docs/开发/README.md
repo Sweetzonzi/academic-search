@@ -27,8 +27,9 @@ academic-search/
 ├─ tools/                     # 维护工具（doc_check / selfcheck / test_doc_check）
 ├─ skills/academic-search/    # 交付物：SKILL.md + references/ + scripts/
 ├─ src/                       # CLI 实现（核心链路仅用标准库）
-├─ store/                     # 内容寻址的字节存储（<sha 前2位>/<sha256>，不进版本库）
-├─ blobs/<work_key>/          # 给人看的产物投影（可重建）
+├─ bytes/<sha 前2位>/<sha256> # 内容坐标：内容寻址的字节实体（不进版本库）
+├─ works/<work_key>/          # 作品坐标：人读投影，硬链接（可重建）
+├─ config/                    # 用户配置：profile.toml、sources.toml（不进版本库）
 ├─ data/                      # sidecar.db、reports/、spike 产物（不进版本库）
 └─ tests/
 ```
