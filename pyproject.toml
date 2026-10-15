@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "academic-search"
 version = "0.0.0"
-description = "本地优先的 LLM 文献检索与阅读辅助 CLI"
+description = "从 arXiv / OpenAlex / Crossref 查找论文并缓存，供 agent 检索、取用与阅读辅助的 CLI"
 requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
