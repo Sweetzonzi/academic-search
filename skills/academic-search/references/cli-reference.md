@@ -167,7 +167,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 | `name` | ✅ | 查询名，**本文件内唯一**；也是 `sync --query` 的名字 |
 | `any_of` | 与 `all_of` 至少给一组 | 关键词并集，同义词放这里 |
 | `all_of` | 同上 | 关键词交集；与 `any_of` 同时生效 |
-| `venues` | 可选 | 载体白名单，写名字（会议与期刊都可以）。当前登记 15 条：ICRA / IROS / NeurIPS / ICML / ICLR / arXiv，以及 RA-L / IEEE T-RO / IJRR / Science Robotics / Journal of Field Robotics / Autonomous Robots / JAAMAS / JAIR / Artificial Intelligence——**完整清单与别名见 `src/academic_search/venues.toml`**。名字解析不到会让该查询报错；`AAMAS` 就登记不上（OpenAlex 没有这个会议实体），见 `docs/06-待决事项.md` 的 `Q29` |
+| `venues` | 可选 | 载体白名单，写名字（会议与期刊都可以）。当前登记 15 条：ICRA / IROS / NeurIPS / ICML / ICLR / arXiv，以及 RA-L / IEEE T-RO / IJRR / Science Robotics / Journal of Field Robotics / Autonomous Robots / JAAMAS / JAIR / Artificial Intelligence——**完整清单与别名见 `src/academic_search/venues.toml`**。名字解析不到会让该查询报错。**`AAMAS` 登记不上**：OpenAlex 里没有这个会议的载体实体（只有同名期刊 `S5405189`），把会议名映射到期刊会让名字与实体错位，所以会议侧靠关键词召回 |
 | `authors` | 可选 | 作者白名单 |
 | `since_years` | 可选 | 回看窗口，默认 3 年 |
 | `expires` | 可选 | 到期日期；只有临时专题才写 |
