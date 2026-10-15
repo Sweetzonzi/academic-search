@@ -357,7 +357,7 @@ def run_lookup(
             failures: list[dict] = []
             if doi:
                 try:
-                    found = openalex_source.work_by_doi(client, doi)
+                    found = openalex_source.work_by_doi(client, doi, api_key=_api_key())
                     if found:
                         records.append(found)
                 except SourceError as exc:
@@ -370,7 +370,7 @@ def run_lookup(
                     failures.append({"source": "crossref", "reason": exc.reason})
             else:
                 try:
-                    found = openalex_source.work_by_arxiv(client, arxiv_id)
+                    found = openalex_source.work_by_arxiv(client, arxiv_id, api_key=_api_key())
                     if found:
                         records.append(found)
                 except SourceError as exc:

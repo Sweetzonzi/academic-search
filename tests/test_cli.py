@@ -22,9 +22,11 @@ class FixtureClient:
         self.cost_usd = 0.0
         self.cost_basis = ""
         self.rate_remaining_usd = None
+        self.urls: list[str] = []
 
     def get(self, url, headers=None, source=""):
         self.requests += 1
+        self.urls.append(url)
         if "works/doi:" in url or "works/10." in url:
             payload = json.loads((FIX / "openalex_work.json").read_text(encoding="utf-8"))
             body = json.dumps(payload["results"][0])
@@ -208,6 +210,16 @@ def test_lookup_not_found(root, capsys, monkeypatch):
                      "--refresh", "true"])
     # FakeClient 对未知 doi 仍返回同一条 fixture，因此这里只断言不是崩溃
     assert code in (0, 1)
+
+
+def test_lookup_sends_openalex_api_key(root, monkeypatch):
+    """lookup 的 OpenAlex 那一腿必须带 key，否则仍走匿名档（会 429）。"""
+    monkeypatch.setenv("OPENALEX_API_KEY", "TESTKEY")
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    service.run_lookup(root, doi="10.48550/arxiv.2610.18808", refresh="true")
+    assert client.urls, "应发出过请求"
+    assert any("api_key=TESTKEY" in url for url in client.urls), client.urls
 
 
 def test_verify_empty_bytes(root, capsys):
