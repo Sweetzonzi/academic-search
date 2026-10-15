@@ -12,7 +12,7 @@
 |---|---|---|
 | `--all-of 词` | — | 可重复；组内 **AND**（交集） |
 | `--any-of 词` | — | 可重复；组内 **OR**（并集） |
-| `--venue 名` | — | 可重复。写**会名**（`ICRA` / `IROS` / `RA-L` / `NeurIPS` / `ICML` / `ICLR` / `arXiv` 已登记），名字由 `src/academic_search/venues.toml` 解析成 OpenAlex source id；**解析不到就报错**（`invalid_args`），也可直写 `S…`。判据是「作品的载体 source id 集合 ∩ 名单 ≠ ∅」，**`venue` 字符串不参与判定**。给了白名单时 **arXiv 那一腿不参与**（arXiv 没有载体概念），它在 `counts.by_source` 里记 0 |
+| `--venue 名` | — | 可重复。写**载体名**（会议或期刊都行，如 `ICRA` / `NeurIPS` / `IEEE T-RO` / `JAAMAS`），名字由 `src/academic_search/venues.toml` 解析成 OpenAlex source id；**解析不到就报错**（`invalid_args`），也可直写 `S…`。判据是「作品的载体 source id 集合 ∩ 名单 ≠ ∅」，**`venue` 字符串不参与判定**。给了白名单时 **arXiv 那一腿不参与**（arXiv 没有载体概念），它在 `counts.by_source` 里记 0 |
 | `--author 名` | — | 可重复 |
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
 | `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，所以 `--limit 5` 之后池子里仍会多出 95 条 |
@@ -157,7 +157,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 | `name` | ✅ | 查询名，**本文件内唯一**；也是 `sync --query` 的名字 |
 | `any_of` | 与 `all_of` 至少给一组 | 关键词并集，同义词放这里 |
 | `all_of` | 同上 | 关键词交集；与 `any_of` 同时生效 |
-| `venues` | 可选 | 载体白名单，写会名（`ICRA` / `IROS` / `RA-L` / `NeurIPS` / `ICML` / `ICLR` / `arXiv` 已登记）。名字由 `src/academic_search/venues.toml` 解析，**解析不到会让该查询报错**；`AAMAS` 目前登记不上（OpenAlex 没有这个会议实体），见 `docs/06-待决事项.md` 的 `Q29` |
+| `venues` | 可选 | 载体白名单，写名字（会议与期刊都可以）。当前登记 15 条：ICRA / IROS / NeurIPS / ICML / ICLR / arXiv，以及 RA-L / IEEE T-RO / IJRR / Science Robotics / Journal of Field Robotics / Autonomous Robots / JAAMAS / JAIR / Artificial Intelligence——**完整清单与别名见 `src/academic_search/venues.toml`**。名字解析不到会让该查询报错；`AAMAS` 就登记不上（OpenAlex 没有这个会议实体），见 `docs/06-待决事项.md` 的 `Q29` |
 | `authors` | 可选 | 作者白名单 |
 | `since_years` | 可选 | 回看窗口，默认 3 年 |
 | `expires` | 可选 | 到期日期；只有临时专题才写 |

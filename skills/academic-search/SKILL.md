@@ -28,7 +28,7 @@ agent_created: true
 | 拿到确定的某一篇 | `lookup --doi` / `--arxiv` / `--title` 三选一 |
 | 某个方向的最新进展 | 现阶段只有 `search --refresh true`（`sync` 未接线） |
 | 某个方向的**经典 / 高被引**论文 | `search --min-citations N`（或 `--min-fwci X` 跨领域比）；这两个是**取数条件**，会多花一次请求，但带回的是「被引最高的一批」 |
-| **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给会名；名字要在登记表里（`ICRA` / `IROS` / `RA-L` / `NeurIPS` / `ICML` / `ICLR` / `arXiv`），**解析不到会报错**。给了它会跳过 arXiv 腿 |
+| **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给名字（会议与期刊都可以，如 `IEEE T-RO` / `JAAMAS`）；清单在 `src/academic_search/venues.toml`（15 条），**解析不到会报错**。给了它会跳过 arXiv 腿 |
 | `config/profile.toml` 能不能用 | `profile check` |
 
 **失败分支（比选对命令更容易出错的地方）：**

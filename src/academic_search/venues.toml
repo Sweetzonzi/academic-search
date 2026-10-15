@@ -8,7 +8,11 @@
 # 写 `S…` 作为会名是被允许的；那是未登记载体的逃生门（ADR-0060 决策 2）。
 # 解析不到的名字**报错**，不静默失效。
 #
-# 载体类型不受限：下面既有会议 / 会议系列，也有期刊（RA-L）与仓库（arXiv）。
+# 载体类型不受限：下面既有会议 / 会议系列，也有期刊与仓库（arXiv）。
+# 一个条目可以有多个 `ids`（远端一次请求用 `|` 连起来，OR 值 ≤ 100），
+# 也可以有多个 `aliases`——配置里写哪个都行。**别登记覆盖残缺的实体**：
+# ICML / ICLR 是已知例外（上游就是碎片，见各自的 note），其余登记项都先把
+# `show` 的逐年覆盖看过再写进来。
 #
 # **查不到实体的载体登记不上**（实测见 EX-2026-10-16-source-contract §16(a)）：
 #   AAMAS —— 会议在 OpenAlex 没有 source 实体（五种全称片段与缩写都返回 0 条，
@@ -48,6 +52,57 @@ note = "International Conference on Machine Learning；**覆盖不完整**：共
 name = "ICLR"
 ids  = ["S4306419637"]
 note = "International Conference on Learning Representations；**覆盖不完整**：共 609 篇，2021 年按 locations. 数到 244 篇"
+
+# ---- 期刊：机器人 ----
+
+[[venue]]
+name = "IEEE T-RO"
+aliases = ["T-RO", "IEEE Transactions on Robotics"]
+ids  = ["S144620930"]
+note = "IEEE Transactions on Robotics；4 238 篇，2024 年 264 篇、2025 年 350 篇。注意与已停刊的 S116420536（IEEE Transactions on Robotics and Automation）区分"
+
+[[venue]]
+name = "IJRR"
+aliases = ["The International Journal of Robotics Research"]
+ids  = ["S73484101"]
+note = "3 170 篇，2024 年 115 篇"
+
+[[venue]]
+name = "Science Robotics"
+ids  = ["S4210213233"]
+note = "976 篇，2024 年 138 篇。`display_name.search:` 下同片段还会返回一个 2019 年的同名会议实体 S4306498398，不登记"
+
+[[venue]]
+name = "Journal of Field Robotics"
+ids  = ["S151299380"]
+note = "2 133 篇，2024 年 226 篇、2025 年 277 篇"
+
+[[venue]]
+name = "Autonomous Robots"
+ids  = ["S144091109"]
+note = "1 740 篇，2024 年 31 篇。`display_name.search:` 下同片段还会返回两个机器人仿真会议，不登记"
+
+# ---- 期刊：多智能体与通用 AI ----
+
+[[venue]]
+name = "JAAMAS"
+aliases = ["Autonomous Agents and Multi-Agent Systems"]
+ids  = ["S5405189"]
+note = "AAMAS 那个社区的期刊（**会议本身在 OpenAlex 没有实体**，见文件顶部）；986 篇，2024 年 52 篇"
+
+[[venue]]
+name = "JAIR"
+aliases = ["Journal of Artificial Intelligence Research"]
+ids  = ["S139930977"]
+note = "1 876 篇，2024 年 109 篇。同名片段下还有一个 13 篇的重复实体 S5407049201，不登记"
+
+[[venue]]
+name = "Artificial Intelligence"
+aliases = ["AIJ"]
+ids  = ["S196139623"]
+note = "Elsevier 的 Artificial Intelligence（AIJ）；4 860 篇，2024 年 133 篇。同片段下另有 AAAI 会议（S4210191458，25 116 篇）与 IJCAI（S4306419999，10 137 篇）等，都不是这一本"
+
+# ---- 仓库 ----
 
 [[venue]]
 name = "arXiv"
