@@ -127,6 +127,27 @@ def test_search_auto_skips_within_window(root, capsys, monkeypatch):
     assert env["data"]["degraded"]["reason"]
 
 
+def test_local_fts_matches_inflections(root):
+    """远端的词形归并必须由本地对齐：drones 要能被 drone 命中（EX-2026-10-15-firstrun）。"""
+    conn = store.connect(config.db_path(root))
+    with store.write_tx(conn):
+        store.insert_record(conn, {
+            "record_uid": "u-drone", "source": "arxiv", "source_id": "2610.99999",
+            "title": "Multi-drone guidance", "abstract": "Multiple drones fuse LiDAR.",
+        })
+        store.create_work(conn, "wk-drone")
+        store.add_member(conn, "u-drone", "wk-drone", "primary")
+    conn.close()
+    outcome = service.run_search(root, SearchSpec(any_of=["drone"]), refresh="false",
+                                 sources=["arxiv"], limit=5)
+    assert [item["work_key"] for item in outcome.items] == ["wk-drone"]
+
+
+def test_fts_query_skips_blank_terms():
+    assert service._fts_query(SearchSpec(all_of=["", "   "])) == ""
+    assert service._fts_query(SearchSpec(all_of=["world model"])) == '("world model" *)'
+
+
 def test_search_all_sources_failed_is_exit_1(root, capsys, monkeypatch):
     class Failing:
         requests = 0
@@ -142,6 +163,28 @@ def test_search_all_sources_failed_is_exit_1(root, capsys, monkeypatch):
                      "--source", "openalex"])
     assert code == 1
     assert envelope_of(capsys)["error"]["code"] == "source_error"
+    # 账本不能把一次全失败的 run 记成 ok
+    conn = store.connect(config.db_path(root))
+    try:
+        row = conn.execute("SELECT status FROM run ORDER BY run_id DESC LIMIT 1").fetchone()
+    finally:
+        conn.close()
+    assert row["status"] == "failed"
+
+
+def test_lookup_doi_url_form_hits_local_record(root):
+    """用户粘 https://doi.org/… 也算命中（adaptor 负责剥前缀，IFACE-STORE §1）。"""
+    conn = store.connect(config.db_path(root))
+    with store.write_tx(conn):
+        store.insert_record(conn, {
+            "record_uid": "u-doi", "source": "crossref", "source_id": "10.1/x", "title": "T",
+        })
+        store.upsert_ident(conn, "doi", "10.1/x", "u-doi")
+        store.create_work(conn, "wk-doi")
+        store.add_member(conn, "u-doi", "wk-doi", "primary")
+    conn.close()
+    outcome = service.run_lookup(root, doi="https://doi.org/10.1/X", refresh="false")
+    assert [item["work_key"] for item in outcome.items] == ["wk-doi"]
 
 
 def test_lookup_doi_uses_network_fixture(root, capsys, monkeypatch):

@@ -18,6 +18,30 @@ class SourceError(Exception):
         self.retryable = retryable
 
 
+#: DOI 的 URL / scheme 前缀。**前缀由 adaptor 负责剥**（IFACE-STORE §1）。
+_DOI_PREFIXES = (
+    "https://doi.org/", "http://doi.org/",
+    "https://dx.doi.org/", "http://dx.doi.org/",
+    "doi:",
+)
+
+
+def normalize_doi(value: str | None) -> str | None:
+    """DOI → 裸小写形式（10.xxxx/yyy）。
+
+    OpenAlex 的 `ids.doi` 与 `locations[].doi` 都写成 https://doi.org/… 形式（实测），
+    不剥前缀会有两处后果：① 与 Crossref / arXiv 的裸 DOI 永远撞不上（L0 失效）；
+    ② arXiv 的 DataCite DOI（10.48550/arxiv.…）桥也挂不上，同一条论文会裂成两个 work。
+    """
+    text = (value or "").strip().lower()
+    for prefix in _DOI_PREFIXES:
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    text = text.strip()
+    return text or None
+
+
 @dataclass
 class SearchSpec:
     """一次检索式；spec_hash 的规范化见 config.canonical_spec。"""

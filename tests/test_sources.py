@@ -93,6 +93,24 @@ def test_openalex_bridges_from_arxiv_location():
     ]
 
 
+def test_openalex_doi_is_normalised():
+    # OpenAlex 的 ids.doi / locations[].doi 都是 https://doi.org/… 形式（fixture 实测）：
+    # 不剥前缀，L0 的 DOI 判据和 arXiv 的 DataCite DOI 桥都会失效
+    record = openalex.parse_work({
+        "id": "https://openalex.org/W1",
+        "ids": {"doi": "https://doi.org/10.1109/MCSE.2011.37"},
+        "locations": [{"doi": "https://doi.org/10.48550/arXiv.2210.03629"}],
+    })
+    assert ("doi", "10.1109/mcse.2011.37") in record["idents"]
+    assert ("arxiv", "2210.03629") in record["bridges"]
+
+
+def test_openalex_real_fixture_doi_is_bare(openalex_payload):
+    record = openalex.parse_work(openalex_payload["results"][0])
+    assert record["idents"][0] == ("openalex", "w2146292423")
+    assert ("doi", "10.1109/mcse.2011.37") in record["idents"]
+
+
 def test_arxiv_search_parses_real_fixture():
     client = FakeClient({"export.arxiv.org/api/query": _text("arxiv_feed.xml")})
     records = arxiv.search(client, SearchSpec(any_of=["control"]), limit=2)
@@ -117,6 +135,18 @@ def test_arxiv_search_query_shape():
         'abs:"world model" AND (abs:"UAV" OR abs:"drone") AND au:"Doe" '
         "AND submittedDate:[202401010000 TO 202412312359]"
     )
+
+
+def test_arxiv_search_query_omits_degenerate_date_bounds():
+    # 实测：arXiv 对退化的边界值（000000000000 / * / 999999999999）一律回 HTTP 500
+    only_upper = arxiv.build_search_query(
+        SearchSpec(all_of=["world model"]), from_date=None, to_date="2026-10-15"
+    )
+    assert "submittedDate" not in only_upper
+    only_lower = arxiv.build_search_query(
+        SearchSpec(all_of=["world model"]), from_date="2024-01-01", to_date=None
+    )
+    assert only_lower.endswith("AND submittedDate:[202401010000 TO 999912312359]")
 
 
 def test_crossref_lookup_parses_real_fixture():

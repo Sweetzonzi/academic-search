@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from . import SourceError, SearchSpec
+from . import SourceError, SearchSpec, normalize_doi
 from .http import HttpResponse, build_url
 
 BASE = "https://api.openalex.org/works"
@@ -68,8 +68,7 @@ def bridges_from_locations(locations: list[dict] | None) -> list[tuple[str, str]
                 value = match.group(1)
                 value = re.sub(r"v\d+$", "", value, flags=re.IGNORECASE)
                 found.append(("arxiv", value.lower()))
-        doi = location.get("doi") or ""
-        doi_match = _ARXIV_DOI_RE.match(doi)
+        doi_match = _ARXIV_DOI_RE.match(normalize_doi(location.get("doi")) or "")
         if doi_match:
             found.append(("arxiv", doi_match.group(1).lower()))
     seen: set[tuple[str, str]] = set()
@@ -89,8 +88,9 @@ def parse_work(work: dict) -> dict:
     source_id = source_id.lower()
     ids = work.get("ids") or {}
     idents: list[tuple[str, str]] = [("openalex", source_id)]
-    if ids.get("doi"):
-        idents.append(("doi", ids["doi"].strip().lower()))
+    doi = normalize_doi(ids.get("doi"))
+    if doi:
+        idents.append(("doi", doi))
     if ids.get("pmid"):
         idents.append(("pmid", (_strip_id(ids["pmid"], "") or "").lower()))
     if ids.get("pmcid"):

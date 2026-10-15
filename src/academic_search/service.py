@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Iterable
 
 from . import config, envelope, group, htmlclean, paths, store, textify
-from .sources import SearchSpec, SourceError
+from .sources import SearchSpec, SourceError, normalize_doi as source_normalize_doi
 from .sources import arxiv as arxiv_source
 from .sources import crossref as crossref_source
 from .sources import openalex as openalex_source
@@ -89,14 +89,22 @@ def _fetch(client, source: str, spec: SearchSpec, *, limit: int,
 
 
 def _fts_query(spec: SearchSpec) -> str:
+    """检索式 → FTS5 查询：词组按短语，组间 all_of AND / any_of OR。
+
+    每个词的**最后一段带前缀匹配**（FTS5 的 * 只作用于短语末词）。这是刻意的宽松：
+    远端（arXiv / OpenAlex）自己做词形归并，本地若按精确词过滤，同一次检索会变成
+    「远端取了 5 条、本地只回 3 条」，丢掉的恰是 drones 这类复数形式
+    （实测见 EX-2026-10-15-firstrun）。
+    """
+
     def term(value: str) -> str:
-        return '"' + value.replace('"', '""') + '"'
+        return '"' + value.replace('"', '""') + '" *'
 
     groups: list[str] = []
-    if spec.all_of:
-        groups.append(" AND ".join(term(t) for t in spec.all_of))
-    if spec.any_of:
-        groups.append(" OR ".join(term(t) for t in spec.any_of))
+    for values, joiner in ((spec.all_of, " AND "), (spec.any_of, " OR ")):
+        cleaned = [term(value) for value in values if value and value.strip()]
+        if cleaned:
+            groups.append(joiner.join(cleaned))
     if not groups:
         return ""
     return "(" + ") AND (".join(groups) + ")"
@@ -224,6 +232,7 @@ def run_search(
     today=None,
 ) -> Outcome:
     root = str(root)
+    sources = list(sources)
     conn = store.connect(config.db_path(root))
     try:
         spec_key = config.spec_hash(
@@ -272,12 +281,13 @@ def run_search(
                 "by_source": by_source,
                 "failures": failures,
             }
+            all_failed = bool(failures) and len(failures) == len(sources) and not wrote_anything
             with store.write_tx(conn):
                 store.finish_run(
-                    conn, run_id, status="ok", requests=client.requests,
+                    conn, run_id, status="failed" if all_failed else "ok", requests=client.requests,
                     cost_usd=client.cost_usd, cost_basis=client.cost_basis, counts=counts,
                 )
-            if failures and len(failures) == len(list(sources)) and not wrote_anything:
+            if all_failed:
                 raise envelope.EnvelopeError(
                     envelope.SOURCE_ERROR,
                     "全部源失败且无写入：" + "; ".join(f["source"] + "=" + f["reason"] for f in failures),
@@ -326,6 +336,8 @@ def run_lookup(
     try:
         outcome = Outcome()
         work_key = None
+        if doi:
+            doi = source_normalize_doi(doi) or doi
         if doi:
             hits = store.record_uids_by_ident(conn, "doi", doi.lower())
             work_key = store.member_work(conn, hits[0]) if hits else None
