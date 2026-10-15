@@ -6,24 +6,24 @@ agent_created: true
 
 # academic-search
 
-一句话：从 arXiv 与 OpenAlex 查找论文并把结果缓存到本地库，**给 agent 一个能查、能取、能复核的入口**——按主题找一批、按标识取一篇、看已经缓存了哪些。结果一律带出处。
+一句话：从 arXiv 与 OpenAlex 查找论文并把结果缓存到本地库，按主题找一批、按标识取一篇、看已经缓存了哪些。结果一律带出处。
 
-**能做什么**
+**它是什么**：一个命令行工具，把外部来源的论文元数据取回本地库，再由本地库提供检索。可做的事分四类：
 
-- **按主题找一批**：`--all-of` / `--any-of` 给词，`--author` / `--venue` / `--since-years` 收窄，`--min-citations` / `--min-fwci` 取经典，`--sort date|citations` 排序，`--limit` 截断展示（不影响取数）。
-- **按标识取确定的一篇**：`lookup --doi` / `--arxiv` / `--title` 三选一，固定带完整摘要。
-- **看已经缓存了哪些**：不给检索式 + `--refresh false`，零联网、零成本。
-- **读画像与自检**：`profile show|check|scaffold`、`verify`、`version`。
+- **按主题批量检索**：给定关键词，可以限定作者、会议或期刊、年份，也可以只保留被引量高于某个阈值的经典文献。
+- **按标识取单篇**：DOI、arXiv ID 或标题任选其一，返回该篇的元数据与完整摘要。
+- **列出本地已有条目**：不联网，把库里现成的内容列出来。
+- **读取与校验配置**：`config/profile.toml` 保存常用检索式，`profile` 子命令读取、校验或生成模板；另有产物抽样校验与版本查询。
 
-**怎么用**：一条命令 → stdout 一个 JSON 信封（`{ok, command, schema, data|error}`），日志走 stderr；退出码 `0` = 有产出、`1` = 没有产出。参数、载荷与错误码的权威清单在 `references/cli-reference.md`，命令清单与各命令的接线状态见 §3。
+**怎么用**：入口是 `scripts/run.cmd`（Windows）与 `scripts/run.sh`（POSIX），见 §1。调用形式是「一条命令 + 若干选项」，stdout 是一个 JSON 信封（`{ok, command, schema, data|error}`），日志走 stderr；退出码 `0` = 有产出、`1` = 没有产出。选项、载荷字段与错误码见 `references/cli-reference.md`，命令清单与各命令的接线状态见 §3。
 
 **三条贯穿全局的性质**
 
-1. **结果一律来自本地库**，联网只负责把新东西写进来——所以它可复现，且同一个问题问第二次不花钱（同一检索式在新鲜度窗口内不重复取数）。
-2. **每条结果都带出处**：`doi` / `arxiv_id` / `work_key`，另有 `sources[]` 说明它由哪几条来源记录合成、各自扮演什么角色。
-3. **要不要联网由 `--refresh` 决定**：`false` 绝不联网、`auto` 到期才刷、`true` 强制刷；三值必须写全。
+1. **结果一律来自本地库**：联网只负责把新结果写进库，检索本身不直接返回网络响应。因此同一检索式在新鲜度窗口内不重复取数，重复提问不产生额外开销。
+2. **每条结果都带出处**：`doi` / `arxiv_id` / `work_key`，另有 `sources[]` 说明该条由哪几条来源记录合成、各自扮演什么角色。
+3. **联网是可选的**：默认只在库内数据过期时才联网，也可以要求强制刷新或完全离线。
 
-**它不是什么**：不接 Zotero、不调 LLM API、不下载 PDF；`sync` / `textify` / `read` / `digest` / `export` 尚未接线（见 §7）。凡标「实测」的数字都是本机跑出来的（最近一次 2026-10-16）。
+**尚未实现的部分**：不接 Zotero，不调用任何 LLM，不下载 PDF；`sync` / `textify` / `read` / `digest` / `export` 等子命令尚未接线（见 §7）。文中标「实测」的数字均来自本机运行（最近一次 2026-10-16）。
 
 ## 1. 调用入口
 
@@ -68,7 +68,7 @@ agent_created: true
 | `version` | 版本与 `schema` 版本 | 可用 |
 | `sync` / `textify` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 尚未实现 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。现在要新论文用 `search --refresh true` |
 
-**术语**：**具名查询**指 `config/profile.toml` 里的一条 `[[query]]`（名字 + 检索式 + 年份窗），**不是**「按标题查论文」——后者是 `lookup --title`。`search` 不接受按名字跑具名查询；要把那条拿来用，就把它的字段原样抄到命令上——`spec_hash` 只由会改变远端请求的那几个参数决定（`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / 两个阈值），抄全了就是同一次检索、命中同一本 run 账本。
+**注意**：`config/profile.toml` 里保存的检索式**不能按名字跑**——`search` 只接受当场给的检索式（按名字执行的那条链路尚未接线）。要用某条保存的检索式，把它的字段原样抄到命令上；字段一致就是同一次检索，会命中同一条新鲜度记录、不重复联网。
 
 ## 4. 没有 `config/profile.toml` 时怎么办
 

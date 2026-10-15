@@ -50,7 +50,7 @@
 | `--sort date` / `--sort citations` | `sort=publication_date:desc` / `cited_by_count:desc`，**总是显式下发** |
 
 - **一次取数固定一页 100 条**（`per_page=100`），`--limit` 只截断展示——计费按次不按条，取少不省钱。
-- **排序与来源都是取数条件**，和 `--venue` / 两个阈值一起进 `spec_hash`；`--limit` / `--abstract` / `--in` 不进。
+- **排序与来源都参与新鲜度判定**（和 `--venue` / 两个阈值一样）；`--limit` / `--abstract` / `--in` 不参与。
 - **给 `--venue` 白名单或任一引用阈值时，arXiv 那一腿不参与**（arXiv 没有载体概念、没有被引数据），它在 `counts.by_source` 里如实记 0，不算失败。
 
 > `--since-years` 在 OpenAlex 上走的是 `publication_date`，也就是**正式版日期**。要找真正的新预印本，用 `--source arxiv`（或补跑一次），不要只看 OpenAlex 的日期窗。

@@ -16,14 +16,14 @@
 | `--author 名` | — | 可重复 |
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
 | `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，所以 `--limit 5` 之后池子里仍会多出 95 条 |
-| `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤。**它进 `spec_hash`**，所以 `--source arxiv` 不会顶替默认两源的新鲜度 |
+| `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
 | `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §4 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
-| `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`；当前没有投影，效果等于 `meta` |
-| `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档各抓一次、都进同一个池，因此换档会联网、也会得到不同的 `spec_hash`。注意它排的是**全局**被引，见下面的坑 |
+| `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`（按需生成的正文目录）；当前还没有内容，效果等于 `meta` |
+| `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档是两次不同的请求，各抓一次，因此换档会联网、也各算一次检索。注意它排的是**全局**被引，见下面的坑 |
 | `--min-citations N` | 关闭 | 原始被引下限：远端下发 `filter=cited_by_count:>N`，本地按同一条件再判一次，**`cited_by_count` 为空即不通过**；给了它就**跳过 arXiv 腿**（那边没有被引数据）。与主题条件是**与**关系，叠加不额外计费 |
 | `--min-fwci X` | 关闭 | 领域归一化被引下限，同上（`filter=fwci:>X`）；与 `--min-citations` 同时给出时**取与**。**覆盖不完整**：很新的论文与部分类型没有该值，而空值不通过 → 它偏向**有一定年头**的文献，见下面的坑 |
-| `--abstract` | 关闭（布尔开关） | 打开时每条附上摘要，截断到 `config/search.toml` 的 `abstract.chars`（默认 800）个字符。**不进 `spec_hash`**，所以不影响「同一检索式命中同一本 run 账本」。`lookup` 不受它约束——`lookup` 固定带完整摘要 |
+| `--abstract` | 关闭（布尔开关） | 打开时每条附上摘要，截断到 `config/search.toml` 的 `abstract.chars`（默认 800）个字符。**不参与新鲜度判定**：同一检索式开了它也算同一次检索。`lookup` 不受它约束——`lookup` 固定带完整摘要 |
 
 **用法清单（每条都实测过）：**
 
@@ -77,7 +77,7 @@ scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limi
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--doi` / `--arxiv` / `--title` | — | **必须给一个**（一个都不给 → `ok=false`、`error.code=invalid_args`）；同时给多个时优先级 `--doi` > `--arxiv` > `--title`（实测） |
-| `--limit N` | `20` | 只影响 `--title` 的候选池大小 |
+| `--limit N` | `20` | 只影响 `--title` 参与匹配的条目数 |
 | `--refresh auto\|true\|false` | `auto` | 见 §4；**只有本地未命中且给的是 `--doi` / `--arxiv` 时才联网**，`--title` 不联网 |
 
 ```powershell
@@ -117,7 +117,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 | `true` | 强制联网 |
 | `false` | **绝不联网**，只读本地库 |
 
-判据是**检索式**（`spec_hash`），不是全局时间：换个关键词就是另一次检索。**`spec_hash` 只覆盖会改变远端请求的那些声明式参数**——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--abstract` / `--in` 不进（所以换个 `--limit` 仍命中同一本账本）。只有 `refreshed=1` 且 `status=ok` 的 run 才算「新鲜」，所以离线查询不会把 `auto` 锁死。
+判据是**检索式**，不是全局时间：换个关键词就是另一次检索。只有**会改变远端请求**的参数参与判定——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--abstract` / `--in` 不参与，所以换个 `--limit` 仍算同一次检索、不会重新联网。只有**真正联网成功过**的那次才算「新鲜」，所以离线查询不会把 `auto` 锁死。
 
 ---
 
@@ -201,7 +201,7 @@ expires = "2026-12-31"
 | code | 含义 | 重试同一命令 | 若否，先做什么 |
 |---|---|---|---|
 | `busy` | 写锁被占用（另一个 run 在跑） | ✅ 稍后一次 | — |
-| `projection_missing` | `works/` 投影缺失 | ❌ | 先跑 `textify --work <work_key>` |
+| `projection_missing` | `works/` 里没有这篇的正文 | ❌ | 先跑 `textify --work <work_key>` |
 | `no_profile` | 没有 `config/profile.toml` | ❌ | 按 SKILL.md §4 创建 |
 | `profile_invalid` | 解析失败（附出错行） | ❌ | 修文件后重跑 `profile check` |
 | `invalid_args` | 参数不合法 | ❌ | 改参数 |
