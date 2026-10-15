@@ -48,7 +48,7 @@ title: 公开学术数据库 API 事实核查报告
 | **扩展语料（约 1.9 亿条）默认不出现在 API 结果里**，且自 Walden 切换后是**静态**的 | 官方 corpus 页；要取需 `corpus=all`。大量无 DOI 的机构库/DataCite 记录落在这里 |
 | 已知会**重复铸条**：机构自铸 DOI 的记录会被当成另一篇论文 | 官方 repositories 页明确警示 |
 
-**额度模型（2026-02 起）**：polite pool 已废除、`mailto` 被忽略，改为 API key + 按次计费：**有 key 免费 $1/天**（00:00 UTC 重置）；无 key **$0.10/天且同一出口 IP 共享**；`filter` = $0.0001/次、`search=` = $0.001/次；**单实体 GET 免费，所有 4xx/5xx 免费**；速率上限 无 key 10 / 免费 key 30 / 年费档 50 req/s（[pricing](https://help.openalex.org/access/pricing/)、[authentication](https://help.openalex.org/api/authentication/)）。
+**额度模型（2026-02 起）**：polite pool 已废除、`mailto` 被忽略，改为 API key + 按次计费：**有 key 免费 $1/天**（00:00 UTC 重置）；无 key **$0.10/天且同一出口 IP 共享**；**不含全文检索的 `filter` = $0.0001/次，任何全文检索 = $0.001/次**——`search=` 与带 `.search` 后缀的 filter（`filter=title_and_abstract.search:`）同价，分档的轴不是参数名（[EX-2026-10-16-source-contract](../实验/EX-2026-10-16-检索口径与来源校验.md) §1 实测）；**单实体 GET 免费，所有 4xx/5xx 免费**；速率上限 无 key 10 / 免费 key 30 / 年费档 50 req/s（[pricing](https://help.openalex.org/access/pricing/)、[authentication](https://help.openalex.org/api/authentication/)）。
 
 **arXiv → OpenAlex 的两条桥（本机实测）**：① **可构造的 DataCite DOI** `10.48550/arXiv.<arXiv-id>` —— `filter=doi:10.48550/arXiv.<id>` 直接命中（$0.0001）；该 DOI 在 DataCite 里从 2006 年（含 `math/0601001` 老式 id）到当天新论文都存在。**但 REF-SOURCES §5 已记录过一次 DOI→错误记录的错配**，命中后必须校验标题/年份。② **Semantic Scholar** `GET /graph/v1/paper/arXiv:<id>` 无 key 返回 `externalIds = {MAG, ArXiv, DBLP, DOI, CorpusId}` —— **唯一显式给出 arXiv 映射的地方**，免费但共享池极易 429。注：Crossref **不认识**这些 DataCite DOI（实测 404）；arXiv API 自带的 `<arxiv:doi>` 是**作者手填**的（实测 3 篇中仅 1 篇有）。
 

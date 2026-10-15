@@ -47,7 +47,7 @@
 | `--all-of x`（可重复） | `abs:"x"`，多个之间用 `AND` |
 | `--any-of a b` | `(abs:"a" OR abs:"b")` |
 | `--author A` | `au:"A"` |
-| `--venue V` | **不生效**：arXiv 记录没有 venue。带上 `--venue` 只会让结果变少，不会报错 |
+| `--venue V` | **arXiv 侧无法表达载体条件**：arXiv 没有 venue 概念。注意现状——带上 `--venue` 时本地过滤会把 arXiv 结果一并排除，结果通常为空 |
 | `--since-years N` | `submittedDate:[(今天-N 年)0000 TO 今天2359]` |
 | `--limit N` | `max_results`（上限 2000） |
 
