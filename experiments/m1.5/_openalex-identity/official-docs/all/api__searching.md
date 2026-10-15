@@ -1,0 +1,268 @@
+# Search
+
+The `search` parameter finds results matching a given text search. Search requests cost **\$1 per 1,000 calls** (vs. \$0.10 per 1,000 for list+filter requests); [rerank](#rerank) adds \$1 per 1,000. See [pricing](/access/example-costs/).
+
+```bash
+# Works with "dna" in title, abstract, or fulltext, or tagged with the DNA keyword
+https://api.openalex.org/works?search=dna
+```
+
+## What gets searched
+
+Each entity type searches different fields:
+
+| Entity | Searchable fields |
+|--------|-------------------|
+| Works | `title`, `abstract`, `fulltext`, and [keywords](#keywords-in-search) |
+| Authors | `display_name`, `display_name_alternatives` |
+| Sources | `display_name`, `alternate_titles`, `abbreviated_title` |
+| Institutions | `display_name`, `display_name_alternatives`, `display_name_acronyms` |
+| Topics/Keywords | `display_name`, `description` |
+| [Locations](/data/locations/) | `title` |
+
+## Keywords in search
+
+A works search also finds papers by their [keywords](/data/keywords/). When a phrase of one to six words in your search is the name of a keyword, or one of its synonyms, a work matches if the phrase is in its text **or** the work carries that keyword. Every other word must still be in the text. So `remote work productivity` finds papers tagged `remote-work` that mention productivity, even if they say "telework" instead, but never a paper tagged only `productivity`. A search never returns fewer works than the same words in the text alone.
+
+```bash
+# Title, abstract, or keywords: what openalex.org searches by default
+https://api.openalex.org/works?search.title_abstract_keywords="antimicrobial resistance"
+
+# Title and abstract text only
+https://api.openalex.org/works?search.title_and_abstract="antimicrobial resistance"
+```
+
+The first search finds 241,167 works, the second 118,920: the keywords add papers that say "antibiotic resistance" or "drug-resistant bacteria", papers in other languages, and papers with no abstract. Boolean and phrase searches work the same way, one term or quoted phrase at a time. The filter form is `title_abstract_keywords.search`, and in [OQL](/access/oql/) it's `title-abstract-keywords has (…)`. The broad search (`search=`, or the `fulltext.search` filter) also matches keywords.
+
+## Text processing
+
+OpenAlex uses [stemming](https://en.wikipedia.org/wiki/Stemming) and removes [stop words](https://www.elastic.co/guide/en/elasticsearch/reference/current/analysis-stop-tokenfilter.html) to improve results:
+
+- Words like "the" and "an" are removed
+- A search for "possums" also returns "possum"
+- Searches match whole words only ("lun" won't match "lunar")
+
+### Exact (unstemmed) search
+
+Use `search.exact` to search without stemming:
+
+```bash
+https://api.openalex.org/works?search.exact=surgery
+```
+
+> **Note:**
+> Works also take scoped search parameters: `search.title`, `search.title_and_abstract` and `search.title_abstract_keywords`, each with an `.exact` form. Each one can appear once per request, and several are combined with AND. `search.semantic` can't be combined with any other search.
+
+## Boolean search
+
+Use `AND`, `OR`, `NOT` (uppercase) for complex queries. Surround phrases with double quotes for exact matching:
+
+```bash
+# Works about "elmo" AND "sesame street" but NOT "cookie" or "monster"
+https://api.openalex.org/works?search=(elmo AND "sesame street") NOT (cookie OR monster)
+```
+
+> **Note:**
+> Words not separated by boolean operators are treated as `AND`.
+
+## Large Boolean queries
+
+Because the query travels in the request URL, the whole request URL is limited to about **4 KB** (roughly 4,000 characters). A very long `search=` value — typically a Boolean query with many `OR` terms, common in systematic reviews — can exceed this and return a `400` error:
+
+```json
+{
+  "error": "Request URL too long",
+  "message": "Your request URL is 4612 bytes, over the 4094-byte limit (roughly 4 KB, mostly the 'search' value). Split a large Boolean query into smaller chunks, request each separately, and combine the returned IDs client-side."
+}
+```
+
+This is a fixed limit, not a usage/credit cost — splitting the query does not lose any results. To run a query larger than ~4 KB, split the `OR` list into chunks, request each chunk separately, and take the union of the returned IDs client-side. The result is exactly the same set of works:
+
+```text
+# Instead of one query that is too long:
+search=(termA OR termB OR ... OR termZ) AND climate
+
+# Split the OR list and union the IDs from each request:
+search=(termA OR ... OR termM) AND climate
+search=(termN OR ... OR termZ) AND climate
+```
+
+Keep each chunk's full request URL under ~4 KB. Combining results is exact because `(X AND (a OR b OR c OR d))` equals `(X AND (a OR b)) ∪ (X AND (c OR d))`. Sending your `api_key` in the `Authorization` header instead of the URL frees a little extra room, but for a large Boolean query you will still need to split it.
+
+> **Tip:**
+> Each chunked request is billed independently, just like any other request. Splitting is only needed to stay under the URL length limit — it is not a way to reduce cost.
+
+## Phrase and proximity search
+
+### Phrase matching
+
+Use double quotes to search for an exact phrase. Multi-word searches without quotes rank results higher when words appear close together.
+
+```bash
+# Exact phrase (few results)
+https://api.openalex.org/works?search="fierce creatures"
+```
+
+```bash
+# Words anywhere (more results)
+https://api.openalex.org/works?search=fierce creatures
+```
+
+### Proximity search
+
+Append `~N` to a quoted phrase to find the words within N positions of each other, without requiring an exact match:
+
+```bash
+# "climate" and "change" within 5 words of each other
+https://api.openalex.org/works?search="climate change"~5
+```
+
+This works for phrases of any length, not just two words. `N` is the total number of position moves allowed to line up all the terms — a single budget shared across the whole phrase, letting the words be reordered or spread apart as long as the total displacement stays within `N`. Widening `N` returns more matches:
+
+```bash
+# the three words near each other, in any order
+https://api.openalex.org/works?search="climate change policy"~10
+```
+
+To require two **separate** phrases near each other — rather than loosening one phrase — join two quoted operands with `~N`. Each operand keeps its own words adjacent, and the two operands must appear within `N` words of each other, in either order:
+
+```bash
+# "machine learning" and "neural network" within 5 words of each other,
+# each phrase kept intact
+https://api.openalex.org/works?search="machine learning"~5~"neural network"
+```
+
+## Wildcards and fuzzy search
+
+### Wildcards
+
+Use `*` to match zero or more characters and `?` to match exactly one character:
+
+- **Trailing wildcard:** `machin*` matches "machine", "machines", "machinery"
+- **Single-character wildcard:** `wom?n` matches "woman" and "women"
+
+The search term must have at least 3 characters before the wildcard. Leading wildcards (e.g., `*ology`) are not supported.
+
+Hyphenated and slashed terms are split into separate words by the search engine, so the 3-character rule applies to the last part. `e-cigarette*` matches "e-cigarette" and "e-cigarettes" (it runs as the adjacent words `e` + `cigarette*`), and `x-ray*` and `t-cell*` work the same way. `covid-19*` is rejected, because only `19` precedes the wildcard.
+
+Wildcards require the **exact (unstemmed)** search — use `search.exact` (or the `fulltext.search.exact` filter), not the default `search`. The default `search` is stemmed, which strips the literal text before the wildcard at index time, so a wildcard there would return wrong results; OpenAlex rejects it with a `400` rather than return misleading matches.
+
+```bash
+https://api.openalex.org/works?search.exact=machin*
+```
+
+Quotes around a **single** word make no difference: `search.exact="machin*"` behaves exactly like `search.exact=machin*` (a one-word "phrase" is just the word). Wildcards also work inside a multi-word quoted phrase, where they match as an adjacent phrase — see [Phrase matching](#phrase-matching) (e.g. `search.exact="smart* phone"`).
+
+> **Tip:**
+> To combine stemmed and truncated terms in one query — common in systematic-review search strategies — use the filter form so each term keeps its own matching: a stemmed `fulltext.search` filter alongside a wildcard `fulltext.search.exact` filter, e.g. `?filter=fulltext.search:treatment,fulltext.search.exact:psoriat*`.
+
+### Fuzzy search
+
+Append `~N` to a term to allow up to N character edits (insertions, deletions, or substitutions). The edit distance N can be 0, 1, or 2:
+
+```bash
+# Matches "machine", "machin", and other close variants
+https://api.openalex.org/works?search=machin~1
+```
+
+The search term must have at least 3 characters before the `~`. This is useful for catching typos and spelling variations.
+
+## Relevance score
+
+Search results include a `relevance_score` property and are sorted by it (descending) by default. The score is based on:
+
+- Text similarity to your search term
+- Citation count, capped: citations raise the score by at most half (a paper with 100 citations gets 25% more, one with 5,000 about 50% more), so a famous paper that barely matches can't outrank a close match
+- A small bonus for works carrying a keyword your search names
+
+## Rerank
+
+Add `rerank=true` to a works search and the top 100 results are reordered by how well each one answers your search, judged by a decision model from each work's title, venue, year and type. Result 101 onward is exactly what you get without `rerank`.
+
+```bash
+https://api.openalex.org/works?search.title_abstract_keywords=remote work productivity&rerank=true
+```
+
+- Reranked results carry `rerank_score`, the model's probability that the work is a relevant result. `relevance_score` stays the text score, so inside the top 100 it is no longer in order.
+- `meta.reranked` says whether the page's order came from the reranker. It is `false` on pages past result 100, and when the reranker didn't answer in time; you then get the normal order.
+- Pages and cursors work as usual. With `cursor=*`, the first 100 results come in reranked order, then the walk continues in the normal order from result 101. It returns the same works as a walk without `rerank`, with no repeats and no gaps.
+- The reranked order is computed once and kept for 24 hours, so paging through it is stable.
+- **Rerank adds 10 credits to the request**: a search costs 10 credits, a reranked one 20 (\$2 per 1,000 calls). The same add-on applies on the [OQL](/api/oql/) door. openalex.org and the [Claude and ChatGPT connectors](/access/connector/) rerank by default. See [Example costs](/access/example-costs/).
+- `rerank=true` needs a search sorted by relevance: with another `sort`, `group_by`, `sample` or `search.semantic` it returns a `400`.
+
+## Semantic search
+
+If you want to match by **meaning rather than keywords** — or if you're searching with a long input like an abstract or grant description — semantic search is a better fit. It uses AI embeddings to find conceptually related works even when the wording differs.
+
+```bash
+https://api.openalex.org/works?search.semantic=machine learning in healthcare
+```
+
+See the [Semantic Search guide](/api/semantic-search/) for examples, supported filters, and limits.
+
+## Legacy: filter-based search
+
+> **Warning:**
+> **Deprecated.** The `filter=field.search:` syntax still works but is no longer recommended. Use the `search` query parameter instead.
+
+The `.search` filter suffix searches a specific field rather than all searchable fields at once:
+
+```bash
+# Authors with "Einstein" in their name (deprecated)
+https://api.openalex.org/authors?filter=display_name.search:einstein
+
+# Works with "cubist" in the title only (deprecated)
+https://api.openalex.org/works?filter=title.search:cubist
+```
+
+The `fulltext.search` filter searches a work's title, abstract, and full text together — the same fields as the `search` query parameter. (The older `default.search` filter is a deprecated alias of `fulltext.search`: it still works and behaves identically, but `fulltext.search` is preferred.) Variants like `.search.exact` (unstemmed) and `.search.no_stem` also exist for some fields.
+
+These filter-based searches cost the same $1 per 1,000 requests. For autocomplete use cases, use the [autocomplete endpoint](/api/autocomplete/) instead.
+
+## Searching author bylines with `raw_author_name.search`
+
+`raw_author_name.search` finds works where someone appears by a specific name-as-published — exactly the string in the byline of the paper. It's the one filter-based search that does *not* have a `search` parameter equivalent, so it stays the right tool for matching a person to their works.
+
+> **Warning:**
+> **It matches across all author names on the work, not within a single byline.** Each unquoted token can match a different author. A search for `raw_author_name.search:john smith` returns a work whose authors are `John Doe` and `Alice Smith` — neither person is named "John Smith," but the tokens appear somewhere in the byline list.
+
+To scope a search to a single person (one byline), wrap the name in double quotes — the query becomes a phrase match against one `raw_author_name` at a time:
+
+```bash
+# Work-scoped: "john" and "smith" appear in *any* bylines (93,304 hits)
+https://api.openalex.org/works?filter=raw_author_name.search:john smith
+
+# Byline-scoped: works with an author named "John Smith" (2,727 hits)
+https://api.openalex.org/works?filter=raw_author_name.search:"john smith"
+```
+
+### Allow middle names and initials with proximity (`~N`)
+
+Append `~N` to a quoted name to allow up to N intervening tokens. This catches middle names and middle initials without dropping the byline scope:
+
+```bash
+# "Jane Smith" only — 1,661 hits
+https://api.openalex.org/works?filter=raw_author_name.search:"jane smith"
+
+# Also matches "Jane M Smith" — 3,779 hits
+https://api.openalex.org/works?filter=raw_author_name.search:"jane smith"~1
+
+# Also matches "Jane Marie Smith" — 4,571 hits
+https://api.openalex.org/works?filter=raw_author_name.search:"jane smith"~2
+```
+
+Wider slop also picks up co-author noise on common names — start narrow and widen only when you need more recall.
+
+### Handle name variants with `OR`
+
+The filter value supports Lucene `OR` between quoted phrases. Use one OR'd query (not multiple `raw_author_name.search:` clauses — those `AND` together and return nothing) to combine name forms:
+
+```bash
+# Comma-reversed byline ("Priem, Jason" → "Priem Jason")
+https://api.openalex.org/works?filter=raw_author_name.search:"jason priem" OR "priem jason"
+
+# First-initial form
+https://api.openalex.org/works?filter=raw_author_name.search:"j priem" OR "priem j"
+```
+
+For a step-by-step walkthrough that uses these patterns to audit and correct an author profile's works, see the [Audit an Author Profile's Works recipe](/tutorials/audit-a-profile/).

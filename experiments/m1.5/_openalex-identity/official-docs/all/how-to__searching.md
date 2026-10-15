@@ -1,0 +1,36 @@
+# Searching
+
+Recipes for the search questions we hear most. For the full querying story — filters, search, sorting, and the rest — start with [Querying](/access/querying/). For counting what you've found, see [Counting](/how-to/counting/).
+
+> [!claude]
+> You can ask in plain language instead: *"The 100 most-cited works on X since 2020."* Every answer comes with the exact OQL query it ran, so you can rerun or refine it yourself. Retracted works are already left out. Set up once: [Using OpenAlex with an AI assistant](/how-to/ai-assistants/).
+
+## How do I find the most-cited works?
+
+Sorting by citations is the default: [openalex.org/works](https://openalex.org/works) lists all works in descending citation order, and any filters you add keep that order. The one exception is text search, which switches the sort to relevance — to get back to citations, click the sort button above the results and choose "citation count" (you'll see `sort=cited_by_count:desc` appear in the URL). To restrict to journal articles, add the filters work type = article and source type = journal.
+
+## How do I limit results to the top 100 most-cited works?
+
+Filter on a citation-count threshold equal to what the 100th most-cited work received:
+
+1. Build your search with all the filters you want, sorted by citation count.
+2. Set results per page to 100, scroll to the bottom, and note the citation count of the last (100th) work — that's your threshold.
+3. Add a "citation count" filter and enter the threshold followed by a hyphen (e.g. `2516-`, meaning "at least 2,516 citations").
+
+Your results are now the top 100, ready to export or analyze. (If the count is slightly over 100, several works tied at the threshold.)
+
+## How do I omit retracted works from my analysis?
+
+Add a filter: click "Add filter", type "retracted", and select it. Then set the filter's dropdown to "is not". Retracted works are now excluded from your results. In the API, that's `filter=is_retracted:false`. Through the [AI agent connector](/access/connector/) they're excluded already, and you have to ask for them to get them back.
+
+## How do I get the query Claude used?
+
+Ask for it: *"what query did you run?"* Every answer from the [AI agent connector](/access/connector/) carries the canonical [OQL](/access/oql/) behind it, plus a link that reruns it. Paste that query into the OQL tab on [openalex.org](https://openalex.org), cite it in a methods section, or hand it back to Claude and ask it to tighten one clause. This is what makes a conversational search reproducible rather than a black box.
+
+## Is there a limit to query length?
+
+Yes — queries are URLs, and the total URL is limited to about 4,000 characters. If your query won't fit, break it into several smaller queries combined with OR logic, export each result set, and combine them — deduplicating on the OpenAlex work ID to remove any overlap.
+
+## Where do I find the volume and issue of an article?
+
+Issue-level metadata lives in the work's [`biblio`](/data/works/attributes/#biblio) attribute — volume, issue, first page, and last page. You'll see it in exports from the website, or in the API response for any single work, e.g. [api.openalex.org/works/W2016949000](https://api.openalex.org/works/W2016949000).

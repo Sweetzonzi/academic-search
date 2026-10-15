@@ -1,0 +1,69 @@
+# Page through Results
+
+## Basic paging
+
+Use `page` and `per_page` to navigate results:
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `page` | 1 | see note below | Page number |
+| `per_page` | 25 | 1-100 | Results per page |
+
+There is no fixed cap on `page` itself — the limit is on how deep you can go: `page × per_page` must not exceed 10,000 (see the warning below).
+
+```bash
+# Page 2 with 100 results per page
+https://api.openalex.org/works?page=2&per_page=100
+```
+
+> **Warning:**
+> **Basic paging limit:** You can only access the first 10,000 results (`page * per_page` must not exceed 10,000). Use cursor paging for more.
+
+> **Note:**
+> The API currently accepts `per_page=200` as legacy behavior, but this is deprecated and will be removed — don't rely on it. **100 is the supported maximum.**
+
+## Cursor paging
+
+Cursor paging lets you access any number of results:
+
+**Step 1:** Start with `cursor=*`
+
+```bash
+https://api.openalex.org/works?filter=publication_year:2020&per_page=100&cursor=*
+```
+
+**Step 2:** Get the `next_cursor` from the response:
+
+```json
+{
+  "meta": {
+    "count": 8695857,
+    "per_page": 100,
+    "next_cursor": "IlsxNjA5MzcyODAwMDAwLCAnaHR0cHM..."
+  },
+  "results": ["..."]
+}
+```
+
+**Step 3:** Use `next_cursor` for the next page:
+
+```bash
+https://api.openalex.org/works?filter=publication_year:2020&per_page=100&cursor=IlsxNjA5MzcyODAwMDAwLCAnaHR0cHM...
+```
+
+Repeat until `next_cursor` is `null` and `results` is empty.
+
+> **Note:**
+> **Cursor paging also works with `group_by`.** To page through more than 200 groups, follow `next_cursor` exactly as shown above. Basic `page`-based paging (`page=2`, …) is *not* supported for grouped results — you must use cursor paging. See [Group](/api/grouping/#paging).
+
+> **Warning:**
+> **Don't use cursor paging to download the entire dataset.**
+>
+> - It takes days to page through /works or /authors
+> - It puts heavy load on our servers
+>
+> Instead, use the [OpenAlex snapshot](/access/snapshot/) for bulk downloads. It's free, fast, and each record has the same shape as an API response (with [a few known differences](/access/snapshot/#how-the-snapshot-differs-from-the-api)).
+
+## Jupyter notebook
+
+See [this community notebook](https://github.com/ourresearch/openalex-api-tutorials/blob/main/notebooks/getting-started/paging.ipynb) for executable paging examples.

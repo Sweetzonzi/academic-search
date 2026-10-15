@@ -5,9 +5,9 @@ r"""文档检查器 —— academic-search 文档的引用完整性与自包含�
 对应 AGENTS.md 第 4 节。用法（在 academic-search/ 下）：
 
     $env:PYTHONIOENCODING='utf-8'
-    & 'D:\anaconda3\python.exe' tools\doc_check.py          # 全部检查
-    & 'D:\anaconda3\python.exe' tools\doc_check.py --refs   # 只查引用
-    & 'D:\anaconda3\python.exe' tools\doc_check.py --self   # 只查自包含性
+    & 'D:\anaconda3\python.exe' tools\doc_check.py          # A+B+C+D 全部检查
+    & 'D:\anaconda3\python.exe' tools\doc_check.py --refs   # 只查 A 链接 / B 引用 / D 路径
+    & 'D:\anaconda3\python.exe' tools\doc_check.py --self   # 只查 C 自包含性
 
 体系（docs/00-文档体系.md）：
   - 每篇文档在 front-matter 里声明 doc-id 与 kind；
@@ -15,7 +15,7 @@ r"""文档检查器 —— academic-search 文档的引用完整性与自包含�
   - 追加式记录（kind = decision / experiment）允许历史措辞，
     自包含性检查只覆盖规范与过程类。
 
-能证明什么：链接是否解析、DOCID §x.y 是否指向存在的小节、缺陷词汇出现在哪。
+能证明什么：链接是否解析、DOCID §x.y 是否指向存在的小节、文档点名的 .py 是否在、缺陷词汇出现在哪。
 证明不了什么（必须人读）：语义漂移、框架是否仍在、结论是否有实测支撑。
 退出码：有硬错误（断链 / 悬空引用）时 1，否则 0。
 """
@@ -51,6 +51,10 @@ C_KINDS = {"normative", "runbook"}
 FM = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
 REF = re.compile(r"(?<![A-Za-z0-9-])([A-Za-z][A-Za-z0-9._-]*)\s*§\s*(\d+(?:\.\d+)*)")
 BARE = re.compile(r"(?<![A-Za-z0-9-])(ADR-\d{4}|EX-\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+)(?![A-Za-z0-9-])")
+
+# D 段：文档里点名的仓库内 .py 路径（行内代码、代码块、正文都算）
+PYREF = re.compile(r"(?<![\w./\\:-])((?:[\w.-]+[/\\])+[\w.-]+\.py)(?![\w])")
+URLRE = re.compile(r"https?://\S+")
 
 
 def markdown_files() -> list[pathlib.Path]:
@@ -149,6 +153,44 @@ def check_sections(files: list[pathlib.Path]) -> int:
     return bad
 
 
+def top_dirs() -> set[str]:
+    """本仓库的顶层目录。运行期目录见 README「目录约定」，可能尚未创建，固定列入。"""
+    runtime = {"data", "bytes", "works"}
+    return runtime | {p.name for p in ROOT.iterdir() if p.is_dir() and not p.name.startswith(".")}
+
+
+def py_paths_in(line: str) -> list[str]:
+    """一行里应当存在于本仓库的 .py 路径（剔除 URL、模板写法与外部仓库的路径）。"""
+    tops = top_dirs()
+    out: list[str] = []
+    for m in PYREF.finditer(URLRE.sub(" ", line)):
+        token = m.group(1)
+        if any(c in token for c in "<>*?${}"):
+            continue
+        if token.replace("\\", "/").split("/")[0] not in tops:
+            continue              # 首段不是本仓库的顶层目录 —— 指的是别的仓库
+        out.append(token)
+    return out
+
+
+def check_py_paths(files: list[pathlib.Path]) -> int:
+    print()
+    print("=" * 88)
+    print("D. 文档点名的 .py 路径")
+    print("=" * 88)
+    bad = 0
+    checked = 0
+    for doc in files:
+        for i, line in enumerate(doc.read_text(encoding="utf-8").split("\n"), 1):
+            for token in py_paths_in(line):
+                checked += 1
+                if not (ROOT / token.replace("\\", "/")).exists():
+                    bad += 1
+                    print(f"  ✗ {rel(doc)}:{i}  {token}  不存在")
+    print(f"  → 检查 {checked} 条路径，不存在 {bad} 条")
+    return bad
+
+
 def check_selfcontainment(files: list[pathlib.Path]) -> int:
     print()
     print("=" * 88)
@@ -178,7 +220,7 @@ def check_selfcontainment(files: list[pathlib.Path]) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="academic-search 文档检查器")
-    ap.add_argument("--refs", action="store_true", help="只查链接与引用")
+    ap.add_argument("--refs", action="store_true", help="只查链接、引用与路径")
     ap.add_argument("--self", dest="selfonly", action="store_true", help="只查自包含性")
     args = ap.parse_args()
 
@@ -191,14 +233,15 @@ def main() -> int:
     if not args.selfonly:
         errors += check_links(files)
         errors += check_sections(files)
+        errors += check_py_paths(files)
     if not args.refs:
         check_selfcontainment(files)
 
     print()
     if errors:
-        print(f"✗ 硬错误 {errors} 处（断链 / 悬空引用）")
+        print(f"✗ 硬错误 {errors} 处（断链 / 悬空引用 / 路径不存在）")
     else:
-        print("✓ 链接与引用全部解析")
+        print("✓ 链接、引用与脚本路径全部解析")
     return 1 if errors else 0
 
 

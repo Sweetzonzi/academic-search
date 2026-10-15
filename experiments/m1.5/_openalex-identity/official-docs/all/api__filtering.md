@@ -1,0 +1,189 @@
+# Filter
+
+Filters narrow your results to entities matching specific conditions. Use the `filter` parameter with attribute-value pairs:
+
+```
+filter=attribute:value,attribute2:value2
+```
+
+> **Note:**
+> Filters are case-insensitive.
+
+## Examples
+
+```bash
+# Works by type
+curl "https://api.openalex.org/works?filter=type:book"
+```
+
+```bash
+# Authors by ORCID status
+curl "https://api.openalex.org/authors?filter=has_orcid:true,works_count:>100"
+```
+
+```bash
+# Sources with many works
+curl "https://api.openalex.org/sources?filter=works_count:>1000"
+```
+
+## Logical expressions
+
+### Inequality
+
+For numerical filters, use `<` and `>` for inequalities:
+
+```bash
+# Sources hosting more than 1000 works
+https://api.openalex.org/sources?filter=works_count:>1000
+```
+
+Some attributes have convenience filters like `from_publication_date` and `to_publication_date`:
+
+```bash
+# Works published between Jan 1-26, 2022
+https://api.openalex.org/works?filter=from_publication_date:2022-01-01,to_publication_date:2022-01-26
+```
+
+### Negation (NOT)
+
+Prepend `!` to negate any filter:
+
+```bash
+# All institutions except those in the US
+https://api.openalex.org/institutions?filter=country_code:!us
+```
+
+### Intersection (AND)
+
+Comma-separated filters are combined with AND:
+
+```bash
+# Works cited more than once AND open access
+https://api.openalex.org/works?filter=cited_by_count:>1,is_oa:true
+```
+
+For AND within a single attribute, repeat the filter or use `+`:
+
+```bash
+# Repeating filters
+# Works with authors from France AND UK
+https://api.openalex.org/works?filter=institutions.country_code:fr,institutions.country_code:gb
+```
+
+```bash
+# Using + symbol
+# Works with authors from France AND UK
+https://api.openalex.org/works?filter=institutions.country_code:fr+gb
+```
+
+> **Note:**
+> The `+` syntax doesn't work for search filters, boolean filters, or numeric filters.
+
+### Addition (OR)
+
+Use the pipe `|` to match any of multiple values:
+
+```bash
+# Works with authors from France OR UK
+https://api.openalex.org/works?filter=institutions.country_code:fr|gb
+```
+
+This is efficient for retrieving many records by ID at once:
+
+```bash
+# Get two works by DOI in one request
+https://api.openalex.org/works?filter=doi:https://doi.org/10.1371/journal.pone.0266781|https://doi.org/10.1371/journal.pone.0267149
+```
+
+> **Warning:**
+> **OR limit:** You can combine up to 100 values with `|` in a single filter. Use `per_page=100` to get all results.
+
+> **Warning:**
+> **OR works within a filter, not between filters.** This will return an error:
+> ```bash
+> # INVALID: OR between different filters
+> https://api.openalex.org/works?filter=institutions.country_code:fr|primary_location.source.issn:0957-1558
+> ```
+
+## Sync filters (paid plans)
+
+[Paid plans](/access/pricing/#annual-plans) unlock two premium filters, available on every entity type, that select records by when they changed in OpenAlex:
+
+- `from_created_date` — records **created** since a date
+- `from_updated_date` — records **updated** (or created) since a date
+
+```bash
+# Works that changed since July 30
+https://api.openalex.org/works?filter=from_updated_date:2026-07-30
+```
+
+These make the API itself a sync mechanism: poll on your own schedule and upsert the results by `id`. Because they combine with any other filter, they're especially good at keeping a **subset** of OpenAlex fresh without any bulk infrastructure — for example, just your institution's works:
+
+```bash
+# Works from one institution that changed since July 30
+https://api.openalex.org/works?filter=institutions.id:I27837315,from_updated_date:2026-07-30
+```
+
+For how this method compares with the snapshot-based approaches (and how to handle deletions and merges), see [Sync](/access/sync/#premium-api-filters-paid-plans).
+
+## Filter by saved collection
+
+The `collection:` filter narrows results to the members of a
+[collection](/api/collections/), on the endpoint of the collection's own type
+(`/works` for a works collection, `/authors` for an authors collection, and so
+on). A private collection filters only with its owner's API key; one shared by
+link or [public](/api/collections/#public-collections) filters for anyone. OpenAlex's
+public collections include country groups (EU27, world regions, World Bank income
+groups, OECD) that work in any country filter, e.g. `authorships.countries:col_LV29j8URoX`. A collection you can't read returns `404` with code
+`collection_not_found`, never an empty result. Any ID-valued filter also takes a
+collection of the matching type, e.g. `primary_location.source.id:col_…` on
+`/works`.
+
+```bash
+GET https://api.openalex.org/works?filter=collection:col_8yWKmRNyEr
+Authorization: Bearer <api_key>
+```
+
+Negation with `!` is supported, and `collection:` combines with any other
+filter. One `collection:` filter is allowed per request — see the
+[Collections guide](/api/collections/) for the full set of caps and behaviors.
+
+## Filter by a related entity's attributes
+
+Some filters reach through to a related entity: a work's journal country, its publisher's country, its funders' country, the region or city of its institutions. Works don't store these values; the API looks up the matching sources, publishers, funders or institutions in their own index first, then filters by their IDs. The value means exactly what it means on the related entity's own filter, and the answer is always current (a journal's h-index as of today).
+
+| Entity | Filter | Looks up | Example |
+|--------|--------|----------|---------|
+| Works | `primary_location.source.country_code` | the source's `country_code` | [Canadian journals, 2024](https://api.openalex.org/works?filter=primary_location.source.country_code:CA,publication_year:2024) |
+| Works | `primary_location.source.is_global_south` | the source's `is_global_south` | `primary_location.source.is_global_south:true` |
+| Works | `primary_location.source.is_ojs`, `.is_high_oa_rate`, `.is_preprint_repository` | the source's flags | `primary_location.source.is_ojs:true` |
+| Works | `primary_location.source.summary_stats.h_index`, `.summary_stats.2yr_mean_citedness` | the source's metrics (ranges work) | `primary_location.source.summary_stats.h_index:>100` |
+| Works | `primary_location.source.host_organization.country_code` | the publisher's `country_codes` (parent publishers included) | `primary_location.source.host_organization.country_code:BR` |
+| Works | `funders.country_code` | the funder's `country_code` | `funders.country_code:CA` |
+| Works | `authorships.institutions.geo.region`, `.geo.city` | the institution's `geo.region`, `geo.city` | `authorships.institutions.geo.region:Catalonia` |
+| Sources | `host_organization.country_code` | the publisher's `country_codes` | `host_organization.country_code:BR` |
+| Authors | `last_known_institutions.geo.region`, `.geo.city` | the institution's `geo.region`, `geo.city` | `last_known_institutions.geo.city:Paris` |
+| Awards | `funder.country_code` | the funder's `country_code` | `funder.country_code:CA` |
+
+They combine with every other filter and take `|` (OR) and `!` (NOT) as usual; quote multi-word values (`geo.region:"New York"`). In OQL they read as `source country`, `publisher country`, `funder country`, `institution region`, `institution city`, `source h-index`, `source OJS` and so on: `works where source country is (CA) and year is (2024)`. They filter but can't sort or group: group works by `primary_location.source.id` (or `funders.id`, `authorships.institutions.id`) instead. A value can match at most 300,000 related records, and `null` isn't accepted; for works with no source, filter `primary_location.source.id:null`.
+
+## Available filters by entity
+
+Each entity type has its own set of filterable fields. See the API reference for complete filter lists:
+
+| Entity | Filters |
+|--------|---------|
+| [Works](/data/works/) | `publication_year`, `type`, `open_access.is_oa`, `author.id`, `institutions.id`, `cited_by_count`, `doi`, `has_abstract`, `study_designs.id`, and ~150 more |
+| [Authors](/data/authors/) | `has_orcid`, `last_known_institutions.id`, `works_count`, `cited_by_count`, `orcid` |
+| [Sources](/data/sources/) | `is_oa`, `is_in_doaj`, `listed_in`, `type`, `country_code`, `host_organization`, `issn` |
+| [Institutions](/data/institutions/) | `country_code`, `type`, `is_global_south`, `continent`, `ror`, `has_ror` |
+| [Topics](/data/topics/) | `domain.id`, `field.id`, `subfield.id`, `works_count` |
+| [Keywords](/data/keywords/) | `works_count`, `cited_by_count` |
+| [Publishers](/data/publishers/) | `country_codes`, `hierarchy_level`, `ror`, `parent_publisher` |
+| [Funders](/data/funders/) | `country_code`, `is_global_south`, `continent`, `ror`, `awards_count` |
+| [Locations](/data/locations/) | `version`, `license`, `is_oa`, `source_id`, `work_id`, `endpoint_id`, `native_id`, `doi`, `provenance`, `ingested_at` |
+
+ORCID filters match the whole list, not just the primary: on authors, `filter=orcid:<id>` matches the primary ORCID or any [`observed_orcids`](/data/authors/#observed_orcids) entry, and on works `filter=authorships.author.orcid:<id>` does the same against each author's `observed_orcids`.
+
+> **Info:**
+> **Looking for text search?** Filters match exact values. For full-text search in titles, abstracts, and other fields, see [Searching](/api/searching/).

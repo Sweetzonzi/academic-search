@@ -1,0 +1,103 @@
+# Topics
+
+A **topic** is a fine-grained research area — "Artificial Intelligence in Healthcare and Education," "Geological and Geochemical Analysis," and about 4,500 more. Topics are the bottom, most granular level of OpenAlex's classification hierarchy: 4 [domains](/data/domains/) → 26 [fields](/data/fields/) → 252 [subfields](/data/subfields/) → 4,516 topics. Every work with enough metadata is assigned up to three topics automatically, and those assignments aggregate up to characterize [authors](/data/authors/), [institutions](/data/institutions/), and [sources](/data/sources/). A topic's OpenAlex ID looks like `T11636`; fetch one at [`api.openalex.org/topics/T11636`](https://api.openalex.org/topics/T11636). Topics are one of several [aboutness](/data/aboutness/) signals — see that page to choose the right level of granularity for your question.
+
+## About
+
+Topics are **inferred**, not looked up: a machine-learning model reads each work's text and predicts what it's about. That's why topics (and the whole hierarchy above them) live under [Aboutness](/data/aboutness/) rather than [Vocabulary](/data/vocabulary/) — the labels are standardized, but the assignment is a prediction. The classification system was developed with [CWTS at Leiden University](https://www.cwts.nl/), extending their [open approach to classifying research publications](https://www.leidenmadtrics.nl/articles/an-open-approach-for-classifying-research-publications).
+
+### Building the topic list
+
+The set of topics itself was built from the citation network. OpenAlex started with works that have incoming and outgoing citations and clustered them by [citation relationships](https://en.wikipedia.org/wiki/Citation_graph): works that cite each other frequently land in the same cluster, and those clusters correspond to real research communities. A large language model then generated a human-readable name and [`description`](#description) for each cluster. Finally, each topic was mapped to a subfield, field, and domain using Scopus's [ASJC categories](https://service.elsevier.com/app/answers/detail/a_id/12007/supporthub/scopus/), which is how every topic gets a place in the four-level hierarchy.
+
+### Assigning topics to works
+
+A classifier reads each work's **title, abstract, and source (journal or repository) name** and picks its topics from the full list of 4,516. It is a fine-tuned [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) language model, trained on 2 million works whose topics were chosen by Claude Opus 5.5, and it reads works in any language. It doesn't use citations, so a brand-new work is classified as well as an old one. The most likely topic becomes the work's [`primary_topic`](/data/works/attributes/#primary_topic), and the top three appear in the work's [`topics`](/data/works/attributes/#topics) array.
+
+Each topic's `score` is the model's **probability that this is the work's main topic**, from 0 to 1. Scores are calibrated: across many works, topics scored 0.9 are right about 90% of the time. The 2nd and 3rd topics are the next most likely ones, so their scores are often small, even close to 0. The model is at least 90% sure on about 64% of works, and right 94.5% of the time on those. The previous classifier, used until October 2026, learned to predict each work's citation cluster from its title, abstract, citations and journal; the new one picks the topics whose subject matches the title and abstract, which is what most readers expect a topic to mean. The gain is largest on works the old classifier had little to go on for: works with no abstract, works not in English, and datasets and other records. On a fresh test set of random works, the primary topic matches the one two AI judges from different labs chose blind from the title and abstract 81.7% of the time (field level: 89.6%), against 24.8% (44.0%) for the previous classifier. That test measures fit to the text, so it favors the new classifier; on arXiv papers, the field matches the category the authors chose 83% of the time, against 75%. Code, model weights, training labels and evaluations are open: [github.com/ourresearch/openalex-topic-classification](https://github.com/ourresearch/openalex-topic-classification/tree/main/v2).
+
+Some works get no topic at all. The model can say a work is **not classifiable**, mostly for records with no abstract and too little title text to go on (data files, specimen records, front matter). Works with neither a title nor an abstract are never classified. About 10% of works have no topic; count them with [`filter=primary_topic.id:null`](https://api.openalex.org/works?filter=primary_topic.id:null).
+
+The topics themselves (their names, IDs, descriptions and places in the hierarchy) did not change when the new classifier replaced the old one in October 2026; only the assignments to works did. Because [FWCI](/data/works/citations/#field-weighted-citation-impact) and citation percentiles compare a work with others in its primary subfield, they changed for most works at the same time.
+
+### What changed in October 2026, and using the old topics
+
+The [announcement](https://blog.openalex.org/same-topics-better-assignments/) explains the change, with examples.
+Every topic's works before and after the switch, where each old topic's works went, and before-and-after profiles for
+countries and the 109 institutions that [support OpenAlex](https://openalex.org/institutional-supporters) are in the [change-set files](https://github.com/ourresearch/openalex-topic-classification/tree/main/v2/changes).
+The [aboutness viewer](https://openalex.org/aboutness/viewer) shows the whole hierarchy with each topic's works.
+
+If you count works by topic for research reporting, filter to publication types (for example
+[`filter=type:article|review|book|book-chapter`](https://api.openalex.org/works?filter=type:article|review|book|book-chapter)).
+The classifier also gives topics to datasets and catalogue records, and a few large families of them (fusion-device shot
+records, specimen records) dominate the `works_count` of a few topics.
+
+To reproduce a report made with the old topics, download every work's old topics and scores, frozen on 5 October 2026,
+from the [v2.0.0 release](https://github.com/ourresearch/openalex-topic-classification/releases/tag/v2.0.0). The
+[text aboutness endpoint](/api/tag-aboutness/#the-previous-topic-classifier-version1) keeps the old classifier at `/text/topics?version=1` until 13 January 2027, and the old classifier itself stays public: [code](https://github.com/ourresearch/openalex-topic-classification/tree/main/v1) on GitHub, [weights and training data](https://zenodo.org/records/10568402) on Zenodo.
+Snapshot users: this change did not move `updated_date`, so reload fully from the 14 October 2026 snapshot.
+
+### One primary subfield per work
+
+Because a work's topics roll up the hierarchy, every work also gets a single **primary subfield, field, and domain** — the ones its `primary_topic` maps to. This single-primary choice is deliberate: it lets OpenAlex normalize citation impact ([FWCI](/data/works/citations/#field-weighted-citation-impact)) against works in the same subfield, and it means a work is classified from *its own text*, not from the catch-all subject of the journal it happened to appear in. The trade-off is precision over recall: a work about the statistics of cancer trials gets one primary subfield, even though it touches several.
+
+### Subfields vs. concepts
+
+Before topics, OpenAlex classified works with [concepts](/data/concepts/) — a Wikipedia-derived vocabulary inherited from the Microsoft Academic Graph. Concepts are **deprecated**: no longer maintained, and superseded by topics. The two work very differently. Concepts matched work metadata to Wikipedia concepts, accepting every match above a relevancy score and firing parent concepts whenever a child matched — high recall, low precision, so concept queries surface many works that aren't really on point. Topics (and their subfields) come from the primary-topic pipeline above, with each topic mapping to a single subfield — much higher precision, at the cost of missing works whose *primary* topic lands elsewhere. To recover some recall, filter on the full `topics` array (`topics.subfield.id:...`) instead of `primary_topic` alone, which matches any of a work's assigned topics.
+
+You can also run the classifier on your own text — a draft abstract or a grant proposal — and get back the same topics (with their subfield, field, and domain) and keywords OpenAlex would assign. See the [text aboutness endpoint](/api/tag-aboutness/).
+
+## Attributes
+
+This is the canonical dictionary of every attribute on a **topic** object. Attributes shared with other entities ([`id`](/data/common-attributes/#id), [`ids`](/data/common-attributes/#ids), [`display_name`](/data/common-attributes/#display_name), [`works_count`](/data/common-attributes/#works_count), [`cited_by_count`](/data/common-attributes/#cited_by_count), [`created_date`](/data/common-attributes/#created_date), [`updated_date`](/data/common-attributes/#updated_date)) are documented once on [Common attributes](/data/common-attributes/); topic-specific notes are below.
+
+### `id`
+*String.* The [OpenAlex ID](/data/#the-openalex-id-scheme) for this topic, e.g. `https://openalex.org/T11636`. Topics use the `T####` scheme (unlike domains, fields, and subfields, which use bare numeric IDs). See [Common attributes](/data/common-attributes/#id).
+
+### `ids`
+*Object.* External identifiers for this topic, as URIs. Topic-specific keys: `openalex` and (when a matching article exists) `wikipedia`.
+
+### `display_name`
+*String.* The topic's name, e.g. "Artificial Intelligence in Healthcare and Education." Generated by an LLM from the topic's citation cluster. See [Common attributes](/data/common-attributes/#display_name).
+
+### `description`
+*String.* A paragraph describing what the topic's cluster of papers is about, also LLM-generated.
+
+### `keywords`
+*List.* The topic's characteristic [keywords](/data/keywords/): keywords with at least 20% of their works in this topic, the 25 carried by the most of the topic's works. Each has `id`, `display_name`, and `score`, the share of that keyword's works that fall in this topic. Broad words that touch many topics ("taxonomy", "morphology") are left out on purpose. Every keyword related to the topic, down to 7%: [`/keywords?filter=topics.id:T10283`](https://api.openalex.org/keywords?filter=topics.id:T10283). Changed on 2026-10-05: this used to be a list of ten descriptive strings, now in [`legacy_keywords`](#legacy_keywords).
+
+### `legacy_keywords`
+*String.* The ten descriptive phrases the topic shipped with (e.g. "Hearing Loss; Cognitive Decline; Cochlear Implants"), separated by semicolons. They were written by a language model from each topic's most-cited papers when the topics were built, and are not OpenAlex keyword IDs.
+
+### `subfield`
+*Object.* The [subfield](/data/subfields/) this topic belongs to (`id`, `display_name`) — the level directly above it in the hierarchy.
+
+### `field`
+*Object.* The [field](/data/fields/) this topic rolls up into (`id`, `display_name`).
+
+### `domain`
+*Object.* The [domain](/data/domains/) this topic rolls up into (`id`, `display_name`) — the top of the hierarchy.
+
+### `siblings`
+*List.* The other topics that share this topic's [`subfield`](#subfield) (`id`, `display_name`), useful for navigating laterally within a subfield. Empty for a topic that is the only one in its subfield.
+
+### `works_count`
+*Integer.* How many works have this as their primary topic. Filtering works on `topics.id` also matches works where this is a secondary topic, so it returns more; filter on `primary_topic.id` to match this number. See [Common attributes](/data/common-attributes/#works_count).
+
+### `cited_by_count`
+*Integer.* Total citations across all works assigned this topic. See [Common attributes](/data/common-attributes/#cited_by_count).
+
+### `works_api_url`
+*String.* A ready-made [Works](/data/works/) API URL for every work tagged with this topic, e.g. `https://api.openalex.org/works?filter=topics.id:T11636`. A convenience link; OpenAlex doesn't store work IDs on the topic object.
+
+### `created_date`
+*String.* The date this topic was added to OpenAlex (`YYYY-MM-DD`). See [Common attributes](/data/common-attributes/#created_date).
+
+### `updated_date`
+*String.* The [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) UTC timestamp of the last change to the topic object. See [Common attributes](/data/common-attributes/#updated_date).
+
+## In the API
+
+The Topics endpoint is at [`api.openalex.org/topics`](https://api.openalex.org/topics). Fetch a single topic by ID — [`/topics/T11636`](https://api.openalex.org/topics/T11636) — or a list, and [filter](/api/filtering/), [search](/api/searching/), [sort](/api/sorting/), [group](/api/grouping/), and [page](/api/paging/) over it.
+
+You can filter and group topics by their place in the hierarchy — `domain.id`, `field.id`, `subfield.id` — and by `works_count`, `cited_by_count`, `id`, and `display_name`, all of which also sort. Full-text matching uses the [`search` parameter](/api/searching/) (the older `.search` filters like `display_name.search` and `keywords.search` are deprecated). Most topic use, though, is on the [Works](/data/works/) endpoint: `filter=primary_topic.id:T11636` (works whose *primary* topic is this one), `filter=topics.id:T11636` (works with this topic anywhere in their top three), or the hierarchy roll-ups `topics.subfield.id`, `topics.field.id`, and `topics.domain.id`. For the full list of endpoints see the [endpoints index](/api/endpoints/).

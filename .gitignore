@@ -6,6 +6,12 @@ works/
 # 用户配置：唯一不可重建（见 docs/使用/配置.md）——各人一份，不进版本库
 config/
 
+# 实验：白名单——只收脚本与调研素材；样本、缓存、产物不进（见 AGENTS.md 第 8 节）
+# 新增实验子目录时不需要改本文件
+experiments/*/*
+!experiments/*/*.py
+!experiments/*/_openalex-identity/
+
 # Python
 __pycache__/
 *.pyc

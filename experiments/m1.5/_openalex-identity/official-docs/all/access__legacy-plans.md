@@ -1,0 +1,15 @@
+# Legacy plans
+
+OpenAlex's plan lineup has changed over the years. The current annual plans are **[Member](/access/member/), [Member+](/access/member-plus/), and [Partner](/access/partner/)** — but if you signed up under an older name, here's what it means for you.
+
+## Premium and Institutional
+
+Before the current lineup, OpenAlex sold **Premium** (higher API limits and priority support for individual organizations) and **Institutional** (the same, plus training and advisory services for academic institutions) subscriptions.
+
+**If you have an existing Premium or Institutional contract, it will be honored** — nothing about your agreement changes out from under you.
+
+When your contract comes up for renewal, you'll renew onto one of the current plans — your contact at OpenAlex will help you pick the tier that matches what you have today, or just email [sales@openalex.org](mailto:sales@openalex.org).
+
+## Older API limits
+
+You may find references around the web to older API tiers — for example a flat "100,000 calls per day" limit, or "polite pool" email addresses. Those describe retired systems. Today's model is [usage-based](/access/pricing/): $1/day free for every account, prepaid usage beyond that, and annual plans with much larger daily budgets. See the [API authentication docs](/api/authentication/) for how keys and budgets work now.

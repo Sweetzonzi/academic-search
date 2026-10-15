@@ -41,6 +41,24 @@ SHOULD_PASS = [
     "让 LLM 能读全文，同时让人能在 Zotero/浏览器里读同一篇的文本版。",
 ]
 
+# D 段必须被抓到：文档点名了一个不在仓库的 .py
+MUST_FLAG_PATHS = [
+    '& $py data/spike-m1.5/00_list.py 25        # 列 arXiv 最新 eess.SY',
+    '| **实测依据**（本机，脚本 `data/spike-m1.5/24_body_scan_bench.py`）',
+    "& 'D:\\anaconda3\\python.exe' tools\\no_such_tool.py",
+]
+
+# D 段不应被抓到：路径存在、或根本不是仓库路径
+SHOULD_PASS_PATHS = [
+    "& 'D:\\anaconda3\\python.exe' tools\\doc_check.py",
+    '脚本 `experiments/m1.5/24_body_scan_bench.py`',
+    '见 https://github.com/psf/requests/blob/main/setup.py',
+    '`tools/*.py`',
+    '产物 `experiments/m1.5/textified/<id>/paper.md`',
+    '见 `zotero-mcp/src/zotero_mcp/identifiers.py`（别的仓库）',
+    '| `embeddings/ratelimit.py`（别的仓库） |',
+]
+
 
 def hits(line: str) -> list[str]:
     out = []
@@ -48,6 +66,11 @@ def hits(line: str) -> list[str]:
         if re.search(pat, line):
             out.append(pat)
     return out
+
+
+def path_hits(line: str) -> list[str]:
+    """D 段：该行里被判定为「应当存在但不在仓库」的 .py 路径。"""
+    return [p for p in dc.py_paths_in(line) if not (dc.ROOT / p.replace("\\", "/")).exists()]
 
 
 def main() -> int:
@@ -63,6 +86,20 @@ def main() -> int:
     noise = 0
     for s in SHOULD_PASS:
         got = hits(s)
+        if got:
+            noise += 1
+        print(f"  {'✗ 误报' if got else '✓'}  {s[:64]}" + (f"   ← {got}" if got else ""))
+
+    print("\nD 段灵敏度：不存在的 .py 必须被命中")
+    for s in MUST_FLAG_PATHS:
+        got = path_hits(s)
+        if not got:
+            miss += 1
+        print(f"  {'✓' if got else '✗ 漏检'}  {s[:64]}")
+
+    print("\nD 段特异度：存在或非仓库的 .py 不应被命中")
+    for s in SHOULD_PASS_PATHS:
+        got = path_hits(s)
         if got:
             noise += 1
         print(f"  {'✗ 误报' if got else '✓'}  {s[:64]}" + (f"   ← {got}" if got else ""))

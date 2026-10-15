@@ -67,12 +67,13 @@ academic-search/
 │  ├─ 决策/（ADR-NNNN.md + 索引） 实验/（EX-*.md + 注册表）
 │  └─ 调研/ 运维/ 使用/ 开发/ 接口/  archive/
 ├─ tools/                     # 维护工具（doc_check / selfcheck / test_doc_check / survey_spike）
+├─ experiments/<里程碑>/       # 设计期实验：脚本与调研素材进版本库；样本、缓存与产物不进
 ├─ skills/academic-search/    # 交付物：SKILL.md + references/ + scripts/
 ├─ src/                       # CLI 实现（核心链路仅用标准库）
 ├─ bytes/<sha 前2位>/<sha256> # 内容坐标：内容寻址的字节实体，只读（不进版本库）
 ├─ works/<work_key>/          # 作品坐标：人读投影，指向 bytes/ 的硬链接（可重建）
 ├─ config/profile.toml        # 领域画像：唯一不可重建的用户数据（不进版本库）
 ├─ config/sources.toml        # 启用的检索数据库与开关
-├─ data/                      # sidecar.db、reports/、spike 产物（不进版本库）
+├─ data/                      # sidecar.db、reports/（不进版本库）
 └─ tests/
 ```

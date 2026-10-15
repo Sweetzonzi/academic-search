@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-r"""盘点 data/spike-m1.5/ 的遗留物。
+r"""盘点 experiments/ 下的实验遗留物。
 
 问题：
   1. 有没有脚本从没被任何东西引用过（孤儿）？
@@ -15,12 +15,16 @@ import difflib
 import hashlib
 import pathlib
 import re
+import sys
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent      # academic-search/
-SPIKE = ROOT / "data" / "spike-m1.5"
-DOCS = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md")) + [ROOT / "AGENTS.md"]
+TOOLS = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(TOOLS))
+from doc_check import markdown_files      # 文档集与 doc_check.py 共用一处定义
 
-doc_text = "\n".join(d.read_text(encoding="utf-8") for d in DOCS if d.exists())
+ROOT = TOOLS.parent                       # academic-search/
+SPIKE = ROOT / "experiments" / "m1.5"
+
+doc_text = "\n".join(p.read_text(encoding="utf-8") for p in markdown_files())
 
 scripts = sorted(p.name for p in SPIKE.glob("*.py"))
 print(f"脚本 {len(scripts)} 个\n")

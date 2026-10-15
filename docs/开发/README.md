@@ -12,7 +12,7 @@ title: "开发导览"
 
 ## 1. 复用与自研策略
 
-**直接复用**（清单与 file:line 见 [REF-ASSETS](../调研/可复用资产-zotero-mcp.md)）：`identifiers.py`（去重第一层）、`local_db.py`（只读策略）、`fulltext_cache.py`（缓存骨架）、`ratelimit.py`（限流器）、`cli_json.py`（JSON 契约）、`skills/zotero-cli/SKILL.md`（skill 结构范例）、`tools/discovery.py`（OpenAlex 客户端）。
+**直接复用**（清单与 file:line 见 [REF-ASSETS](../调研/可复用资产-zotero-mcp.md)）：`identifiers.py`（去重第一层）、`local_db.py`（只读策略）、`fulltext_cache.py`（缓存骨架）、`ratelimit.py`（限流器）、`cli_json.py`（JSON 契约）、`skills/zotero-cli/SKILL.md`（skill 结构范例）、`discovery.py`（OpenAlex 客户端，在该项目的 `tools/` 下）。
 
 
 ## 2. 仓库布局

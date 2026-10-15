@@ -1,0 +1,19 @@
+# Support
+
+## How do I get help?
+
+Pick the channel that fits:
+
+- **Ask an AI agent.** This whole site is built to be read by agents (every page has a [Markdown twin](/llms.txt)), so asking your AI assistant is often the fastest route to an answer — see [Agents](/access/agents/). In Claude, the free [OpenAlex connector](/how-to/ai-assistants/) can also run the searches for you.
+- **Ask the community.** The [OpenAlex Community group](https://groups.google.com/g/openalex-community) is our public forum — other users are often quick with answers. (For announcements from us, join the [OpenAlex User Group](https://groups.google.com/g/openalex-users).)
+- **Come to a webinar.** We run public webinars on OpenAlex topics with live Q&A, and post the recordings afterwards: [openalex.org/events](https://openalex.org/events). (Office hours are paused at the moment.)
+- **Watch a video.** [Our YouTube channel](https://www.youtube.com/@OpenAlex_org) has training tutorials, town-hall recordings, and user presentations.
+- **File a support ticket** at [openalex.org/contact](https://openalex.org/contact) — the right channel for account issues, data errors, and anything that needs us specifically.
+
+Reporting a data error? A ticket is the default lane for that too — see [Fixing errors](/access/fixing-errors/) for how error reports are handled and which fixes you can make yourself.
+
+## How long does it take to get a response to a ticket?
+
+We check the help desk daily and read every ticket. But we're a small team getting hundreds of tickets a month, so honestly: we can't respond to every one, and a response can take a few weeks. Tickets matter even when they don't get a reply — they're a key input into what we prioritize and fix.
+
+If your organization relies on OpenAlex and needs guaranteed, timely support, that's included in our [paid plans](/access/pricing/).
