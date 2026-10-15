@@ -23,7 +23,7 @@ agent_created: true
 2. **每条结果都带出处**：`doi` / `arxiv_id` / `work_key`，另有 `sources[]` 说明该条由哪几条来源记录合成、各自扮演什么角色。
 3. **联网是可选的**：默认只在库内数据过期时才联网，也可以要求强制刷新或完全离线。
 
-**尚未实现的部分**：不接 Zotero，不调用任何 LLM，不下载 PDF；`sync` / `textify` / `read` / `digest` / `export` 等子命令尚未接线（见 §7）。文中标「实测」的数字均来自本机运行（最近一次 2026-10-16）。
+**尚未实现的部分**：不接 Zotero，不调用任何 LLM，不下载 PDF；`sync` / `textify` / `read` / `digest` / `export` 等子命令尚未接线（见 §7）。文中标「实测」的结论是实际运行验证过的，不是从上游文档推断的。
 
 ## 1. 调用入口
 
@@ -41,7 +41,7 @@ agent_created: true
 | 问一个具体问题、要一批论文 | `search --all-of` / `--any-of` 给一组词 |
 | 看**本地库里**已经有什么（不联网、零成本） | `search` 不给检索式 + `--refresh false` |
 | 拿到确定的某一篇 | `lookup --doi` / `--arxiv` / `--title` 三选一 |
-| 某个方向的最新进展 | 现阶段只有 `search --refresh true`（`sync` 未接线） |
+| 某个方向的最新进展 | 只有 `search --refresh true`（`sync` 未接线） |
 | 某个方向的**经典 / 高被引**论文 | `search --min-citations N`（或 `--min-fwci X` 跨领域比）；这两个是**取数条件**，会多花一次请求，但带回的是「被引最高的一批」 |
 | **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给名字（会议与期刊都可以，如 `IEEE T-RO` / `JAAMAS`）；清单在 `src/academic_search/venues.toml`（15 条），**解析不到会报错**。给了它会跳过 arXiv 腿 |
 | `config/profile.toml` 能不能用 | `profile check` |
@@ -59,14 +59,14 @@ agent_created: true
 
 ## 3. 命令总览
 
-| 命令 | 作用 | 本机状态（实测 2026-10-16） |
+| 命令 | 作用 | 状态 |
 |---|---|---|
 | `search` | 当场给的检索式 → 查库（可选刷新）→ 结果列表 | 可用 |
 | `lookup` | 按 DOI / arXiv ID / 标题取确定的一篇 | 可用 |
 | `profile show` / `check` / `scaffold` | 读 `config/profile.toml` | 可用 |
 | `verify` | 抽样重算 `bytes/` 的 sha256 | 可用 |
 | `version` | 版本与 `schema` 版本 | 可用 |
-| `sync` / `textify` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 尚未实现 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。现在要新论文用 `search --refresh true` |
+| `sync` / `textify` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 尚未实现 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。要新论文用 `search --refresh true` |
 
 **注意**：`config/profile.toml` 里保存的检索式**不能按名字跑**——`search` 只接受当场给的检索式（按名字执行的那条链路尚未接线）。要用某条保存的检索式，把它的字段原样抄到命令上；字段一致就是同一次检索，会命中同一条新鲜度记录、不重复联网。
 
@@ -99,16 +99,16 @@ agent_created: true
 3. **降级不重试、失败只重试一次**；`degraded` 出现时如实告诉用户「本次只查了本地」。
 4. **不要直接改 `data/`**：落库由命令负责。
 5. **本版本不接 Zotero**。
-6. **「经典」不等于「被引高」**：`--min-citations` 与 `--sort citations` 排的是**全局**被引，实测头部有跨领域命中（`small-world models` 这类分词假命中也会有）。给用户「这个方向的经典」前必须**逐条复核主题相关性**，并说明这批是按被引排的、不是按相关性排的；`--min-fwci` 还会整批排除没有 `fwci` 的最新论文。细则见 `references/cli-reference.md` §1。
+6. **「经典」不等于「被引高」**：`--min-citations` 与 `--sort citations` 排的是**全局**被引，头部会出现跨领域命中，也可能是分词造成的假命中（`small-world models` 含子串 `world model`）。给用户「这个方向的经典」前必须**逐条复核主题相关性**，并说明这批是按被引排的、不是按相关性排的；`--min-fwci` 还会整批排除没有 `fwci` 的最新论文。细则见 `references/cli-reference.md` §1。
 
-## 7. 本机限制与未接线（实测 2026-10-16）
+## 7. 环境要求与未接线
 
-- **OpenAlex 匿名档不可用**：无 key 的每日额度按出口 IP 共享且随时耗尽，实测 429。今天唯一稳的路径是 `--source arxiv`；要用 OpenAlex 先配 `OPENALEX_API_KEY`。
-- 结果里每条 `sources[].source` 会告诉你它来自哪个源、扮演什么角色（`preprint` / `primary` / `published`）。
+- **OpenAlex 需要 API key**：匿名档的每日额度按出口 IP 共享、很容易耗尽（额度用尽时返回 429）。要用 OpenAlex，先把 key 放进环境变量 `OPENALEX_API_KEY`；只用 `--source arxiv` 则不需要任何凭据。
+- 结果里每条 `sources[].source` 说明该项来自哪个源、扮演什么角色（`preprint` / `primary` / `published`）。
 - 未接线：`sync` / `textify` / `read` / `digest list|put` / `export` / `bundle`；`promote` / `graph` 同样尚未实现。
 
 ## 8. references（按需读，不要默认加载）
 
 - `references/cli-reference.md`：**要某个命令的参数、坑、载荷字段或错误码时读**。含 `config/profile.toml` 的字段表与示例。
 - `references/openalex-fields.md`：OpenAlex 的覆盖范围、计费与字段事实，以及几个会咬人的坑。
-- `references/arxiv-syntax.md`：arXiv 检索语法、日期窗的实测限制、限流，以及本 CLI 的参数怎么映射过去。
+- `references/arxiv-syntax.md`：arXiv 检索语法、日期窗的限制、限流，以及本 CLI 的参数怎么映射过去。

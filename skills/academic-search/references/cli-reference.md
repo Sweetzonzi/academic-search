@@ -2,7 +2,7 @@
 
 > 按需加载：**要某个命令的参数、坑、载荷或错误码时才读本文**。SKILL.md 只给决策路径与硬规则。
 > 参数签名与默认值的家在 `src/academic_search/cli.py`；本文列的是当前值，二者不一致时以代码为准。
-> 凡标「实测」的都是本机跑出来的（2026-10-16）。
+> 凡标「实测」的都是实际运行验证过的（2026-10-16）。
 
 ---
 
@@ -19,7 +19,7 @@
 | `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
 | `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §4 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
-| `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`（按需生成的正文目录）；当前还没有内容，效果等于 `meta` |
+| `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`（按需生成的正文目录）；还没有生成过正文时，效果等于 `meta` |
 | `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档是两次不同的请求，各抓一次，因此换档会联网、也各算一次检索。注意它排的是**全局**被引，见下面的坑 |
 | `--min-citations N` | 关闭 | 原始被引下限：远端下发 `filter=cited_by_count:>N`，本地按同一条件再判一次，**`cited_by_count` 为空即不通过**；给了它就**跳过 arXiv 腿**（那边没有被引数据）。与主题条件是**与**关系，叠加不额外计费 |
 | `--min-fwci X` | 关闭 | 领域归一化被引下限，同上（`filter=fwci:>X`）；与 `--min-citations` 同时给出时**取与**。**覆盖不完整**：很新的论文与部分类型没有该值，而空值不通过 → 它偏向**有一定年头**的文献，见下面的坑 |
@@ -123,7 +123,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 
 ## 5. `verify` 与 `version`
 
-- `verify [--sample N]`：抽样重算 `bytes/` 里文件的 `sha256` 并与文件名比对。`--sample` 默认 20，**`0` = 全量**；只读、不修复；发现不匹配即 `error.code=io_error`、退出码 1 并列出文件。当前 `data/` 下没有 `bytes/`，所以它是空跑（`mismatches: []`）。
+- `verify [--sample N]`：抽样重算 `bytes/` 里文件的 `sha256` 并与文件名比对。`--sample` 默认 20，**`0` = 全量**；只读、不修复；发现不匹配即 `error.code=io_error`、退出码 1 并列出文件。`bytes/` 下还没有产物时它是空跑（`mismatches: []`）。
 - `version`：`data = {version, schema}`，自检用。
 
 ---
@@ -167,7 +167,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 | `name` | ✅ | 查询名，**本文件内唯一**；也是 `sync --query` 的名字 |
 | `any_of` | 与 `all_of` 至少给一组 | 关键词并集，同义词放这里 |
 | `all_of` | 同上 | 关键词交集；与 `any_of` 同时生效 |
-| `venues` | 可选 | 载体白名单，写名字（会议与期刊都可以）。当前登记 15 条：ICRA / IROS / NeurIPS / ICML / ICLR / arXiv，以及 RA-L / IEEE T-RO / IJRR / Science Robotics / Journal of Field Robotics / Autonomous Robots / JAAMAS / JAIR / Artificial Intelligence——**完整清单与别名见 `src/academic_search/venues.toml`**。名字解析不到会让该查询报错。**`AAMAS` 登记不上**：OpenAlex 里没有这个会议的载体实体（只有同名期刊 `S5405189`），把会议名映射到期刊会让名字与实体错位，所以会议侧靠关键词召回 |
+| `venues` | 可选 | 载体白名单，写名字（会议与期刊都可以）。登记表有 15 条：ICRA / IROS / NeurIPS / ICML / ICLR / arXiv，以及 RA-L / IEEE T-RO / IJRR / Science Robotics / Journal of Field Robotics / Autonomous Robots / JAAMAS / JAIR / Artificial Intelligence——**完整清单与别名见 `src/academic_search/venues.toml`**。名字解析不到会让该查询报错。**`AAMAS` 登记不上**：OpenAlex 里没有这个会议的载体实体（只有同名期刊 `S5405189`），把会议名映射到期刊会让名字与实体错位，所以会议侧靠关键词召回 |
 | `authors` | 可选 | 作者白名单 |
 | `since_years` | 可选 | 回看窗口，默认 3 年 |
 | `expires` | 可选 | 到期日期；只有临时专题才写 |

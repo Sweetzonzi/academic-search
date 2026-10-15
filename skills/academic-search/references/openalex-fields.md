@@ -17,7 +17,7 @@
 | 匿名（无 key） | `x-ratelimit-limit-usd: 0.1` / 天，**按出口 IP 共享**（同一网络的其他人也在用这个池子） |
 | 免费 key | **$1/天**（10 倍），每日 00:00 UTC 重置；速率 30 req/s（匿名 10 req/s） |
 | 不含全文检索的 `filter` | `x-ratelimit-cost-usd: 0.0001` → $0.1/千次 |
-| **任何全文检索** | `0.001` → $1/千次。`search=` 与**带 `.search` 后缀的 filter**（如 `filter=title_and_abstract.search:`）**同价**——分档的轴是「有没有做全文检索」，不是参数名（本机实测） |
+| **任何全文检索** | `0.001` → $1/千次。`search=` 与**带 `.search` 后缀的 filter**（如 `filter=title_and_abstract.search:`）**同价**——分档的轴是「有没有做全文检索」，不是参数名（实测） |
 | 单实体 GET | **免费**（额度耗尽后仍返回 200） |
 | 任意 4xx / 5xx | **免费**（计 0 credits） |
 | `from_created_date` / `from_updated_date` | 文档标注付费层，无 key 实测 429 → 「增量」只能走「回看 N 天 + 本地去重」 |
