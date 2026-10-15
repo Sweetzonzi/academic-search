@@ -52,7 +52,7 @@ title: "设计决策索引"
 
 | 编号 | 标题 | 简述 | 状态 |
 |---|---|---|---|
-| [ADR-0027](ADR-0027.md) | 专题的组织方式 | 画像里的具名查询 + 候选池 tag，不建独立实体 | accepted |
+| [ADR-0027](ADR-0027.md) | 专题的组织方式 | 专题只由画像里的具名查询承载，不建独立实体（候选池 tag 已由 [ADR-0050](ADR-0050.md) 删除） | accepted |
 | [ADR-0028](ADR-0028.md) | 报告分「新发表 / 新发现」 | 首次入池语义收敛到 `run_id`；发表时间不进幂等键 | accepted |
 | [ADR-0029](ADR-0029.md) | 全文字节进 `bytes/` | sidecar 只存指针；v1 的 FTS5 不覆盖正文 | accepted |
 | [ADR-0030](ADR-0030.md) | 确认按动作分级 | 写 Zotero 需确认，翻译与文本化全自动 | accepted |
@@ -61,12 +61,20 @@ title: "设计决策索引"
 | [ADR-0033](ADR-0033.md) | 字节层两个坐标 | `bytes/`（内容）与 `works/`（作品）；`works/` 目录名用 `work_key` | accepted |
 | [ADR-0034](ADR-0034.md) | 投影用硬链接 | `works/` 硬链接到 `bytes/`，`bytes/` 里的文件设只读 | accepted |
 | [ADR-0035](ADR-0035.md) | 全文按需取 | 定时 run 不取全文；「要这篇」= `textify` 产物落盘，不落状态 | accepted |
-| [ADR-0036](ADR-0036.md) | 正文检索走文件扫描 | `--in body` 扫 `works/`；FTS5 只管标题/摘要/翻译 | accepted |
+| [ADR-0036](ADR-0036.md) | 正文检索走文件扫描 | `--in body` 扫 `works/`；FTS5 只管英文标题与摘要原文 | accepted |
 | [ADR-0037](ADR-0037.md) | CLI 不调 LLM | 翻译与摘要走 `digest list/put`，由对话模型经子 agent 产出 | accepted |
 | [ADR-0038](ADR-0038.md) | 调度不进工具 | `sync` 只保证无头、幂等、报告结构化；频率由用户配 | accepted |
 | [ADR-0039](ADR-0039.md) | 画像 agent 写、CLI 只读 | `profile show/check/scaffold`；未配置时先出草稿再确认 | accepted |
 | [ADR-0040](ADR-0040.md) | 配置集中在 `config/` | 一份配置一个固定文件名；画像只有一份；密钥不进配置 | accepted |
-| [ADR-0041](ADR-0041.md) | 临时检索与具名查询并列 | `--all-of`／`--any-of` 当场给检索式；结果照样落候选池 | accepted |
+| [ADR-0041](ADR-0041.md) | 临时检索 | `--all-of`／`--any-of` 当场给检索式；结果照样落候选池（具名查询入口已由 [ADR-0049](ADR-0049.md) 移出 `search`） | accepted |
 | [ADR-0042](ADR-0042.md) | v1 只支持英文检索 | FTS5 用默认分词器；中文翻译不进索引，只给人读 | accepted |
 | [ADR-0043](ADR-0043.md) | 检索只有一条路径 | 刷新（可选）→ 查库 → 返回；`--refresh auto\|true\|false`，判据按 `spec_hash` | accepted |
+| [ADR-0044](ADR-0044.md) | 候选池不设状态机 | 行存在即入过池；`dismissed_at` / `dismissed_until` 两个可空时间戳；质量分级在读取端过滤 | accepted |
+| [ADR-0045](ADR-0045.md) | 面向阅读的派生文本进 `bytes/` | 译文与中文摘要的文本进 `bytes/`，sidecar 只留缓存键与指针；FTS5 只索引英文原文 | accepted |
+| [ADR-0046](ADR-0046.md) | 初版范围收在 M0–M3 | 引用图谱（M4 的 `graph`）在初版之外；`graph` 保留命令形状、实现后移 | accepted |
+| [ADR-0047](ADR-0047.md) | 命令面收敛 | 不设 `dedupe` / `stage`（去重与落池内化）；初版不提供人工分组入口 | accepted |
+| [ADR-0048](ADR-0048.md) | 初版只自动执行 L0/L1 | L2 弱判据登记为待确认（`dup_suspect`）并在结果里标注，不自动归组 | accepted |
+| [ADR-0049](ADR-0049.md) | 检索式来源分工 | `search` 只跑当场给的检索式；`sync` 独占画像里的具名查询并产出报告 | accepted |
+| [ADR-0050](ADR-0050.md) | 删除 topic 标签 | 候选池不记方向归属；按方向列清单与综述取材走 `search` 查库 | accepted |
+| [ADR-0051](ADR-0051.md) | 初版范围再收敛 | 命令面 = 六条用户命令 + 三条支撑命令（`sync` / `verify` / `profile`）；`export` 与 A/B/C 分级顺延，初版只做纯规则硬排除；不做预算闸门，改为成本可见 + 余额降级 | accepted |
 
