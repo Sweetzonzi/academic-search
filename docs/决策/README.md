@@ -88,4 +88,6 @@ title: "设计决策索引"
 | [ADR-0060](ADR-0060.md) | venue 判据 | 白名单与黑名单共用「载体 source id 集合 ∩ 名单 ≠ ∅」；会名到 S-id 的登记表随代码进版本库；远端改用 `locations.source.id:`，给定白名单时跳过 arXiv 腿 | accepted |
 | [ADR-0061](ADR-0061.md) | 找经典的阈值 | 新增 `--min-citations` 与 `--min-fwci`（同时给出取与）；远端 filter + 本地同条件、空值不通过；`--sort citations` 保持展示排序 | partially superseded by ADR-0062 |
 | [ADR-0062](ADR-0062.md) | `spec_hash` 的口径与取数页大小 | `spec_hash` = 远端请求的声明式参数（含 `--source` / `--sort` / 两个阈值）；解析后的日期与 `--limit` / `--abstract` / `--in` 不进；取数固定一页 100 条，`--limit` 只管展示 | accepted |
+| [ADR-0063](ADR-0063.md) | 检索门 | 主题条件改用 `search.title_and_abstract=` 的单个布尔串；每个值一律加引号（因此不需要转义层）；结构化条件继续走 `filter=` | accepted |
+| [ADR-0064](ADR-0064.md) | L1 补桥 | 桥是「声明」不是「标识」：`record_ident` 区分 `ident` / `bridge`，桥可被真正的持有者接管；校验落在 `ingest()` 的 L1 分支且归组前做 | accepted |
 
