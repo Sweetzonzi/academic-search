@@ -10,9 +10,11 @@
 #
 # 载体类型不受限：下面既有会议 / 会议系列，也有期刊与仓库（arXiv）。
 # 一个条目可以有多个 `ids`（远端一次请求用 `|` 连起来，OR 值 ≤ 100），
-# 也可以有多个 `aliases`——配置里写哪个都行。**别登记覆盖残缺的实体**：
-# ICML / ICLR 是已知例外（上游就是碎片，见各自的 note），其余登记项都先把
-# `show` 的逐年覆盖看过再写进来。
+# 也可以有多个 `aliases`——配置里写哪个都行。别名一律取自**实测的
+# `display_name`**（全称、带缩写的短写各来一条），所以写论文上印的全称也能解析；
+# `venue_key()` 会统一大小写、连字符与空白，`IEEE RA-L` 与 `ieee ra‑l`（U+2011）等价。
+# **别登记覆盖残缺的实体**：ICML / ICLR 是已知例外（上游就是碎片，见各自的 note），
+# 其余登记项都先把 `show` 的逐年覆盖看过再写进来。
 #
 # **查不到实体的载体登记不上**（实测见 EX-2026-10-16-source-contract §16(a)）：
 #   AAMAS —— 会议在 OpenAlex 没有 source 实体（五种全称片段与缩写都返回 0 条，
@@ -25,31 +27,41 @@
 
 [[venue]]
 name = "ICRA"
+aliases = ["IEEE ICRA", "International Conference on Robotics and Automation",
+           "Proceedings - IEEE International Conference on Robotics and Automation"]
 ids  = ["S4210217939"]
 note = "Proceedings - IEEE International Conference on Robotics and Automation；系列级实体，32 827 篇，2023–2026 每年 1347–1882 篇"
 
 [[venue]]
 name = "IROS"
+aliases = ["IEEE/RSJ IROS", "International Conference on Intelligent Robots and Systems",
+           "IEEE/RSJ International Conference on Intelligent Robots and Systems"]
 ids  = ["S4363608614"]
 note = "IEEE/RSJ International Conference on Intelligent Robots and Systems；26 305 篇，2024 年 1587 篇。另有一个 0 篇的同名 proceedings 实体 S4393918188，不登记"
 
 [[venue]]
 name = "RA-L"
+aliases = ["IEEE RA-L", "IEEE Robotics and Automation Letters",
+           "Robotics and Automation Letters"]
 ids  = ["S4210169774"]
-note = "IEEE Robotics and Automation Letters；11 633 篇，2024 年 1551 篇"
+note = "IEEE Robotics and Automation Letters；11 633 篇，2024 年 1551 篇。OpenAlex 的载体名就是全称 IEEE Robotics and Automation Letters，别名因此按全称与带 IEEE 的短写各来一条"
 
 [[venue]]
 name = "NeurIPS"
+aliases = ["NIPS", "neural information processing systems",
+           "Conference on Neural Information Processing Systems"]
 ids  = ["S4363606243"]
 note = "neural information processing systems（载体名是全小写）；19 928 篇，2024 年 4494 篇"
 
 [[venue]]
 name = "ICML"
+aliases = ["International Conference on Machine Learning"]
 ids  = ["S4306419644"]
 note = "International Conference on Machine Learning；**覆盖不完整**：共 2001 篇，2021 年按 locations. 数到 530 篇，PMLR 卷下的作品不在这个实体里（未查证）"
 
 [[venue]]
 name = "ICLR"
+aliases = ["International Conference on Learning Representations"]
 ids  = ["S4306419637"]
 note = "International Conference on Learning Representations；**覆盖不完整**：共 609 篇，2021 年按 locations. 数到 244 篇"
 
@@ -106,6 +118,7 @@ note = "Elsevier 的 Artificial Intelligence（AIJ）；4 860 篇，2024 年 133
 
 [[venue]]
 name = "arXiv"
+aliases = ["arXiv (Cornell University)", "arxiv.org"]
 ids  = ["S4306400194"]
 note = "arXiv (Cornell University)；repository，1 469 849 篇。本地判据还要靠 [[source_carrier]]，因为 arXiv 记录没有 locations[]"
 

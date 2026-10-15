@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import pathlib
+import tomllib
+
 import pytest
 
 from academic_search import venues
+
+REGISTRY_PATH = pathlib.Path(venues.__file__).with_name(venues.REGISTRY_NAME)
 
 
 def test_registry_resolves_shipped_names():
@@ -16,6 +21,32 @@ def test_registry_resolves_shipped_names():
 def test_resolve_is_case_and_hyphen_insensitive():
     # U+2011 非断行连字符（RA‑L）也要与 ASCII 的 RA-L 命中同一条
     assert venues.resolve(["ra\u2011l"])[0] == venues.resolve(["RA-L"])[0]
+
+
+def test_aliases_and_full_names_resolve_to_the_same_id():
+    """别名与全称都取自实测的 `display_name`：论文上印哪个写法都能写进配置。"""
+    for group in (
+        ["RA-L", "IEEE RA-L", "IEEE Robotics and Automation Letters",
+         "Robotics and Automation Letters"],
+        ["ICRA", "IEEE ICRA", "International Conference on Robotics and Automation"],
+        ["NeurIPS", "NIPS", "neural information processing systems"],
+        ["JAAMAS", "Autonomous Agents and Multi-Agent Systems"],
+        ["Artificial Intelligence", "AIJ"],
+        ["arXiv", "arXiv (Cornell University)"],
+    ):
+        ids = [venues.resolve([name])[0] for name in group]
+        assert all(item == ids[0] and item for item in ids), group
+
+
+def test_registry_has_no_key_collisions():
+    """别名撞车会让后一条**静默覆盖**前一条——登记表必须保持键不重叠。"""
+    raw = tomllib.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    seen: dict[str, str] = {}
+    for entry in raw.get("venue", []):
+        for name in [entry["name"]] + list(entry.get("aliases") or []):
+            key = venues.venue_key(name)
+            assert key not in seen, (name, seen.get(key))
+            seen[key] = entry["name"]
 
 
 def test_source_id_escape_hatch():

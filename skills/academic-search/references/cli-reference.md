@@ -12,7 +12,7 @@
 |---|---|---|
 | `--all-of 词` | — | 可重复；组内 **AND**（交集） |
 | `--any-of 词` | — | 可重复；组内 **OR**（并集） |
-| `--venue 名` | — | 可重复。写**载体名**（会议或期刊都行，如 `ICRA` / `NeurIPS` / `IEEE T-RO` / `JAAMAS`），名字由 `src/academic_search/venues.toml` 解析成 OpenAlex source id；**解析不到就报错**（`invalid_args`），也可直写 `S…`。判据是「作品的载体 source id 集合 ∩ 名单 ≠ ∅」，**`venue` 字符串不参与判定**。给了白名单时 **arXiv 那一腿不参与**（arXiv 没有载体概念），它在 `counts.by_source` 里记 0 |
+| `--venue 名` | — | 可重复。写**载体名**（会议或期刊都行，如 `ICRA` / `NeurIPS` / `IEEE T-RO` / `JAAMAS`）；**全称与别名也认**（`IEEE Robotics and Automation Letters` = `RA-L`，大小写与连字符不敏感）。名字由 `src/academic_search/venues.toml` 解析成 OpenAlex source id；**解析不到就报错**（`invalid_args`），也可直写 `S…`。判据是「作品的载体 source id 集合 ∩ 名单 ≠ ∅」，**`venue` 字符串不参与判定**。给了白名单时 **arXiv 那一腿不参与**（arXiv 没有载体概念），它在 `counts.by_source` 里记 0 |
 | `--author 名` | — | 可重复 |
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
 | `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，所以 `--limit 5` 之后池子里仍会多出 95 条 |
