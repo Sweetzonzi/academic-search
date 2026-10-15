@@ -8,7 +8,6 @@ from __future__ import annotations
 import base64
 import gzip
 import io
-import os
 import pathlib
 import tarfile
 
@@ -251,19 +250,13 @@ def test_run_textify_no_arxiv_record(tmp_path):
     assert info.value.code == envelope.SOURCE_ERROR
 
 
-# 本机可用的真实 pandoc（DSH 内置 runtime 的 pypandoc_binary 提供）
-KNOWN_PANDOC = (
-    r"C:\Users\13680\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python"
-    r"\Lib\site-packages\pypandoc\files\pandoc.exe"
-)
+# 真 pandoc 与真样本由 `conftest.real_pandoc` 定位（见 tests/conftest.py）
 SAMPLE = pathlib.Path("experiments/m1.5/2610.18630v1")
 
 
-@pytest.mark.skipif(not os.path.exists(KNOWN_PANDOC), reason="本机没有可用的 pandoc")
-def test_real_pandoc_service_latex_route(tmp_path):
+@pytest.mark.skipif(not SAMPLE.is_dir(), reason="样本目录不在版本库里")
+def test_real_pandoc_service_latex_route(tmp_path, real_pandoc):
     """真 pandoc + 真样本走一遍 service：取件 → 解包 → 装配 → 归一化。"""
-    if not SAMPLE.is_dir():
-        pytest.skip("样本目录不在版本库里")
     make_work(tmp_path, arxiv_id="2610.18630v1")
     blob = tarball({
         name: (SAMPLE / name).read_bytes() for name in textify.list_files(str(SAMPLE))
@@ -271,7 +264,7 @@ def test_real_pandoc_service_latex_route(tmp_path):
     client = StubClient({arxiv_source.eprint_url("2610.18630v1"): blob})
     outcome = service.run_textify(
         tmp_path, "wk1", source="latex", work_dir=str(tmp_path / "out"),
-        client=client, pandoc=KNOWN_PANDOC,
+        client=client, pandoc=real_pandoc,
     )
     assert outcome.source == "arxiv_latex"
     assert outcome.attempts == []

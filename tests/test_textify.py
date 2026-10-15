@@ -9,11 +9,7 @@ import pytest
 
 from academic_search import textify
 
-# 本机可用的真实 pandoc（DSH 内置 runtime 的 pypandoc_binary 提供）
-KNOWN_PANDOC = (
-    r"C:\Users\13680\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python"
-    r"\Lib\site-packages\pypandoc\files\pandoc.exe"
-)
+# 真 pandoc 与真样本由 `conftest.real_pandoc` 定位（见 tests/conftest.py）
 SAMPLE = pathlib.Path("experiments/m1.5/2610.18630v1")
 
 
@@ -265,13 +261,11 @@ def test_normalise_pandoc_output_end_to_end(tmp_path):
 
 # --------------------------------------------------------------- 真实 pandoc
 
-@pytest.mark.skipif(not os.path.exists(KNOWN_PANDOC), reason="本机没有可用的 pandoc")
-def test_real_pandoc_end_to_end(tmp_path):
-    if not SAMPLE.is_dir():
-        pytest.skip("样本目录不在版本库里")
+@pytest.mark.skipif(not SAMPLE.is_dir(), reason="样本目录不在版本库里")
+def test_real_pandoc_end_to_end(tmp_path, real_pandoc):
     root_tex = textify.find_root_tex(str(SAMPLE))
     media = tmp_path / "_media"
-    raw = textify.run_pandoc(root_tex, str(media), pandoc=KNOWN_PANDOC)
+    raw = textify.run_pandoc(root_tex, str(media), pandoc=real_pandoc)
     assert "$$" in raw
     out, stats = textify.normalise_pandoc_output(
         raw, str(media), str(tmp_path / "figures"), pdftocairo=textify.find_pdftocairo()
