@@ -1,16 +1,29 @@
 ---
 name: academic-search
-description: 从 arXiv 与 OpenAlex 查找学术论文并把结果缓存下来，可按主题、作者、会议或期刊、年份、被引下限检索，可按 DOI / arXiv ID / 标题取确定的一篇，也可列出已缓存的论文；结果一律带出处（DOI / arXiv ID / work_key）。用户问「这个方向有没有人做过」「最近有什么新论文」「这个方向的经典 / 高被引论文」「某个会议或期刊上有哪些相关工作」「本地库里现在有哪些论文」「某篇的 DOI / 摘要 / 引用」时用它。
+description: 从 arXiv 与 OpenAlex 或本地缓存查找学术论文，可按主题、作者、会议或期刊、年份、被引下限批量检索，可按 DOI / arXiv ID / 标题抽取单篇，结果一律带出处。用户问「这个方向有没有人做过」「最近有什么新论文」「这个方向的经典 / 高被引论文」「某个会议或期刊上有哪些相关工作」「本地库里现在有哪些论文」「某篇的 DOI / 摘要 / 引用」时用它。
 agent_created: true
 ---
 
 # academic-search
 
-一句话：从 arXiv 与 OpenAlex 查找论文并把结果缓存到本地库，**给 agent 一个能查、能取、能复核的入口**——按主题找一批、按标识取一篇、看已经缓存了哪些。结果一律带出处（DOI / arXiv ID / work_key）。
+一句话：从 arXiv 与 OpenAlex 查找论文并把结果缓存到本地库，**给 agent 一个能查、能取、能复核的入口**——按主题找一批、按标识取一篇、看已经缓存了哪些。结果一律带出处。
 
-**两条命令的取数顺序不同，不要用一句话概括**：`search` 是「按新鲜度决定要不要联网刷新 → 查本地库」，所以 `--refresh false` 也能返回库里已有的东西；`lookup` 是「先查本地库，没命中才联网」。两条命令的结果**都来自本地库**——这正是它可复现、且同一个问题问第二次不花钱的原因。
+**能做什么**
 
-本 skill 是**薄包装**：只有这份说明、`references/` 与一个 launcher；CLI 实现、`config/`、`data/` 都在仓库里，由 launcher 指过去。命令与载荷的契约在仓库 `docs/03-接口契约.md` 与 `docs/接口/输出载荷.md`；本文自包含，凡标「实测」的都是在本机跑出来的。
+- **按主题找一批**：`--all-of` / `--any-of` 给词，`--author` / `--venue` / `--since-years` 收窄，`--min-citations` / `--min-fwci` 取经典，`--sort date|citations` 排序，`--limit` 截断展示（不影响取数）。
+- **按标识取确定的一篇**：`lookup --doi` / `--arxiv` / `--title` 三选一，固定带完整摘要。
+- **看已经缓存了哪些**：不给检索式 + `--refresh false`，零联网、零成本。
+- **读画像与自检**：`profile show|check|scaffold`、`verify`、`version`。
+
+**怎么用**：一条命令 → stdout 一个 JSON 信封（`{ok, command, schema, data|error}`），日志走 stderr；退出码 `0` = 有产出、`1` = 没有产出。参数、载荷与错误码的权威清单在 `references/cli-reference.md`，命令清单与各命令的接线状态见 §3。
+
+**三条贯穿全局的性质**
+
+1. **结果一律来自本地库**，联网只负责把新东西写进来——所以它可复现，且同一个问题问第二次不花钱（同一检索式在新鲜度窗口内不重复取数）。
+2. **每条结果都带出处**：`doi` / `arxiv_id` / `work_key`，另有 `sources[]` 说明它由哪几条来源记录合成、各自扮演什么角色。
+3. **要不要联网由 `--refresh` 决定**：`false` 绝不联网、`auto` 到期才刷、`true` 强制刷；三值必须写全。
+
+**它不是什么**：不接 Zotero、不调 LLM API、不下载 PDF；`sync` / `textify` / `read` / `digest` / `export` 尚未接线（见 §7）。凡标「实测」的数字都是本机跑出来的（最近一次 2026-10-16）。
 
 ## 1. 调用入口
 
@@ -33,6 +46,8 @@ agent_created: true
 | **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给名字（会议与期刊都可以，如 `IEEE T-RO` / `JAAMAS`）；清单在 `src/academic_search/venues.toml`（15 条），**解析不到会报错**。给了它会跳过 arXiv 腿 |
 | `config/profile.toml` 能不能用 | `profile check` |
 
+**两条命令的取数顺序不同，不要用一句话概括**：`search` 是「按新鲜度决定要不要联网刷新 → 查本地库」，所以 `--refresh false` 也能返回库里已有的东西；`lookup` 是「先查本地库，没命中才联网」。两条命令的结果**都来自本地库**。
+
 **失败分支（比选对命令更容易出错的地方）：**
 
 - 本地没有 → 先怀疑检索式太窄，别急着联网；确认后 `search --refresh true`。
@@ -51,7 +66,7 @@ agent_created: true
 | `profile show` / `check` / `scaffold` | 读 `config/profile.toml` | 可用 |
 | `verify` | 抽样重算 `bytes/` 的 sha256 | 可用 |
 | `version` | 版本与 `schema` 版本 | 可用 |
-| `sync` / `textify` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 契约已定、实现未到 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。现在要新论文用 `search --refresh true` |
+| `sync` / `textify` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 尚未实现 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。现在要新论文用 `search --refresh true` |
 
 **术语**：**具名查询**指 `config/profile.toml` 里的一条 `[[query]]`（名字 + 检索式 + 年份窗），**不是**「按标题查论文」——后者是 `lookup --title`。`search` 不接受按名字跑具名查询；要把那条拿来用，就把它的字段原样抄到命令上——`spec_hash` 只由会改变远端请求的那几个参数决定（`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / 两个阈值），抄全了就是同一次检索、命中同一本 run 账本。
 
@@ -90,7 +105,7 @@ agent_created: true
 
 - **OpenAlex 匿名档不可用**：无 key 的每日额度按出口 IP 共享且随时耗尽，实测 429。今天唯一稳的路径是 `--source arxiv`；要用 OpenAlex 先配 `OPENALEX_API_KEY`。
 - 结果里每条 `sources[].source` 会告诉你它来自哪个源、扮演什么角色（`preprint` / `primary` / `published`）。
-- 未接线：`sync` / `textify` / `read` / `digest list|put` / `export` / `bundle`；`promote`、`graph` 按契约顺延到 M4 / M5。
+- 未接线：`sync` / `textify` / `read` / `digest list|put` / `export` / `bundle`；`promote` / `graph` 同样尚未实现。
 
 ## 8. references（按需读，不要默认加载）
 
