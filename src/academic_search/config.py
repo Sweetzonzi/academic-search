@@ -154,7 +154,7 @@ def check_profile(root: str | Path) -> dict:
     if not path.exists():
         return {
             "ok": False,
-            "error": {"code": envelope.NO_PROFILE, "message": "没有画像：" + str(path)},
+            "error": {"code": envelope.NO_PROFILE, "message": "没有 profile：" + str(path)},
             "errors": [],
             "queries": [],
         }
@@ -292,7 +292,7 @@ def active_sources(enabled: dict[str, bool], *, command: str = "search") -> list
 
 def scaffold_profile() -> str:
     return (
-        "# config/profile.toml —— 领域画像（agent 写、CLI 只读）\n"
+        "# config/profile.toml —— profile（agent 写、CLI 只读）；一条 [[query]] 是一个关注方向\n"
         "# 一次性的检索式走 search --any-of；想让某个检索变成定期任务，再写成 [[query]]。\n"
         "\n"
         "[[query]]\n"

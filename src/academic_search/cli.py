@@ -104,7 +104,7 @@ def _dispatch(args, name: str):
     if name == "profile.show":
         profile, errors = config.load_profile(root)
         if profile is None:
-            message = errors[0].message if errors else "没有画像：" + str(config.config_dir(root) / config.PROFILE)
+            message = errors[0].message if errors else "没有 profile：" + str(config.config_dir(root) / config.PROFILE)
             raise envelope.EnvelopeError(
                 envelope.PROFILE_INVALID if errors else envelope.NO_PROFILE, message
             )
