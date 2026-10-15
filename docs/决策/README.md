@@ -77,4 +77,8 @@ title: "设计决策索引"
 | [ADR-0049](ADR-0049.md) | 检索式来源分工 | `search` 只跑当场给的检索式；`sync` 独占画像里的具名查询并产出报告 | accepted |
 | [ADR-0050](ADR-0050.md) | 删除 topic 标签 | 候选池不记方向归属；按方向列清单与综述取材走 `search` 查库 | accepted |
 | [ADR-0051](ADR-0051.md) | 初版范围再收敛 | 命令面 = 六条用户命令 + 三条支撑命令（`sync` / `verify` / `profile`）；`export` 与 A/B/C 分级顺延，初版只做纯规则硬排除；不做预算闸门，改为成本可见 + 余额降级 | accepted |
+| [ADR-0052](ADR-0052.md) | 数据源适配层 | 逐源映射进 IFACE-SOURCE；日期列改为 `published_at` + `updated_at`；规范 type 六值（硬排除 = paratext ∪ 黑名单）；work 级聚合逐列写死；批量补桥 | accepted |
+| [ADR-0053](ADR-0053.md) | 输出载荷与读取定位 | 载荷契约独立成 IFACE-PAYLOAD；`read` 改为定位器（bytes 路径 + 图件映射 + 锚点行号）；排序按 `published_at`，score 初版不写 | accepted |
+| [ADR-0054](ADR-0054.md) | 派生文本的通道与键 | `digest put` 改批量 JSON；kind 含粒度；新增译名表 `config/terms.toml` 并把 `glossary_version` 更名 `terms_version`；content_hash 细则写死 | accepted |
+| [ADR-0055](ADR-0055.md) | 运行留档与运行环境 | 留档合并为 `data/runs/<run_id>/`；宿主只装薄 bundle；`vendor/` 装 pandoc；回看 30 天；锁冲突即 `busy`；库内 UTC、报告本地时区 | accepted |
 

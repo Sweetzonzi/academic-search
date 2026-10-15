@@ -17,6 +17,8 @@ title: "开发导览"
 
 ## 2. 仓库布局
 
+**实现前先读两份契约**：[IFACE-SOURCE](../接口/数据源适配.md)（逐源映射、源能力矩阵、work 级聚合、硬排除、画像到查询的映射）与 [IFACE-PAYLOAD](../接口/输出载荷.md)（载荷、枚举与错误码）。
+
 ## 目录约定（规划）
 
 ```
@@ -25,11 +27,12 @@ academic-search/
 ├─ AGENTS.md                  # 文档维护约束（自包含性）
 ├─ docs/                      # 需求 / 调研 / 设计 / 计划 / 实验记录
 ├─ tools/                     # 维护工具（doc_check / selfcheck / test_doc_check）
-├─ skills/academic-search/    # 交付物：SKILL.md + references/ + scripts/
+├─ vendor/                    # 运行时依赖（便携 pandoc）
+├─ skills/academic-search/    # 交付物：SKILL.md + references/ + launcher（薄 bundle，见 IFACE-SKILL）
 ├─ src/                       # CLI 实现（核心链路仅用标准库）
 ├─ bytes/<sha 前2位>/<sha256> # 内容坐标：内容寻址的字节实体（不进版本库）
 ├─ works/<work_key>/          # 作品坐标：人读投影，硬链接（可重建）
-├─ config/                    # 用户配置：profile.toml、sources.toml（不进版本库）
-├─ data/                      # sidecar.db、reports/、spike 产物（不进版本库）
-└─ tests/
+├─ config/                    # 用户配置：profile.toml、sources.toml、search.toml、terms.toml（不进版本库）
+├─ data/                      # sidecar.db、runs/<run_id>/（不进版本库）
+└─ tests/                     # 含 fixtures/：脱敏真实响应
 ```

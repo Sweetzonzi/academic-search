@@ -19,6 +19,8 @@
 | [DESIGN 设计说明书](docs/02-设计说明书.md) | 架构总览与系统设计；决策/契约/风险/待决已外移 | 评审或实现 |
 | [IFACE 接口契约](docs/03-接口契约.md) | 命令、输出信封、退出码、依赖策略；五类边界契约索引 | 写代码或接 skill 时 |
 | [IFACE-DATA 数据模型](docs/接口/数据模型.md) | sidecar 的表、键、字段与全库不变量；物理 DDL 在 `src/**/schema.sql` | 写 SQL、迁移或加字段时 |
+| [IFACE-SOURCE 数据源适配](docs/接口/数据源适配.md) | 逐源字段映射、源能力矩阵、规范枚举、源文本规范化、work 级聚合与硬排除 | 写某个源的客户端或改去重与过滤时 |
+| [IFACE-PAYLOAD 输出载荷](docs/接口/输出载荷.md) | 结果条目、`run.json`、`digest` 与 `read` 的载荷，以及全部机器枚举与错误码 | 写命令输出或接 skill 时 |
 | [PLAN 里程碑与计划](docs/04-里程碑与计划.md) | 里程碑与下一步 | 想动手或拍板 |
 | [VERIFY 验证与验收](docs/05-验证与验收.md) | 判据→验证映射、测试分层（框架） | 写测试前 |
 | [OPEN 待决事项](docs/06-待决事项.md) | 未拍板问题与待实测项 | 拍板前 |
@@ -41,7 +43,7 @@
 | 现状调研 | 已完成（[调研索引](docs/调研/README.md)），硬事实均有实测或官方文档支撑 |
 | 设计 | [DESIGN](docs/02-设计说明书.md) 已成型；50 条决策见 [决策索引](docs/决策/README.md) |
 | **文本化验证** | ✅ 已实测通过（[EX-2026-10-14-textify](docs/实验/EX-2026-10-14-文本化.md)）：8 篇 eess.SY 论文，两条路线均产出 `paper.md` + `figures/`，47 张图 0 失败、691 条交叉引用被改写 |
-| 实施 | **M0 与 M1 未开始**；文本化流水线技术路线已验证并待产品化。初版范围收在「LLM 检索缓存层」（**M0–M3**）：六条用户命令 + `sync` / `verify` / `profile` 三条支撑命令，不接 Zotero，引用图谱在初版外（[ADR-0032](docs/决策/ADR-0032.md)、[ADR-0046](docs/决策/ADR-0046.md)）；`export`（含 `bundle` 别名）与 A/B/C 质量分级顺延出初版，只保留撤稿与黑名单硬排除（[ADR-0051](docs/决策/ADR-0051.md)） |
+| 实施 | **M0 与 M1 未开始**；文本化流水线技术路线已验证并待产品化。初版范围收在「LLM 检索缓存层」（**M0–M3**）：六条用户命令 + `sync` / `verify` / `profile` 三条支撑命令，不接 Zotero，引用图谱在初版外（[ADR-0032](docs/决策/ADR-0032.md)、[ADR-0046](docs/决策/ADR-0046.md)）；`export`（含 `bundle` 别名）与 A/B/C 质量分级顺延出初版，只保留撤稿与黑名单硬排除（[ADR-0051](docs/决策/ADR-0051.md)）。设计缺口已补齐：适配层、载荷契约、派生文本通道与运行留档见 [ADR-0052](docs/决策/ADR-0052.md)–[ADR-0055](docs/决策/ADR-0055.md) |
 | 阻塞项 | 无。M0 是**省钱前置**而非 M1 的阻塞（增量已有「回看 N 天 + 本地去重」兜底）；Zotero 写入通道顺延到 M5。日常约束是 OpenAlex 无 key 时每日额度 $0.10（[PLAN](docs/04-里程碑与计划.md)） |
 
 ---
@@ -68,6 +70,7 @@ academic-search/
 │  ├─ 决策/（ADR-NNNN.md + 索引） 实验/（EX-*.md + 注册表）
 │  └─ 调研/ 运维/ 使用/ 开发/ 接口/  archive/
 ├─ tools/                     # 维护工具（doc_check / selfcheck / test_doc_check / survey_spike）
+├─ vendor/                    # 运行时依赖（便携 pandoc）；tools/ 只放维护脚本
 ├─ experiments/<里程碑>/       # 设计期实验：脚本与调研素材进版本库；样本、缓存与产物不进
 ├─ skills/academic-search/    # 交付物：SKILL.md + references/ + scripts/
 ├─ src/                       # CLI 实现（核心链路仅用标准库）
@@ -75,6 +78,8 @@ academic-search/
 ├─ works/<work_key>/          # 作品坐标：人读投影，指向 bytes/ 的硬链接（可重建）
 ├─ config/profile.toml        # 领域画像：唯一不可重建的用户数据（不进版本库）
 ├─ config/sources.toml        # 启用的检索数据库与开关
-├─ data/                      # sidecar.db、reports/（不进版本库）
-└─ tests/
+├─ config/search.toml         # 刷新阈值、增量回看天数、黑名单
+├─ config/terms.toml          # 译名表（翻译用词对照）
+├─ data/                      # sidecar.db、runs/<run_id>/（不进版本库）
+└─ tests/                     # 含 fixtures/：脱敏后的真实响应，契约测试不联网
 ```
