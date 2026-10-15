@@ -12,6 +12,9 @@ experiments/*/*
 !experiments/*/*.py
 !experiments/*/_openalex-identity/
 
+# 运行时依赖：便携 pandoc 等外部可执行文件（下载得到，不进版本库）
+vendor/
+
 # Python
 __pycache__/
 *.pyc
