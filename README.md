@@ -43,8 +43,8 @@
 | 现状调研 | 已完成（[调研索引](docs/调研/README.md)），硬事实均有实测或官方文档支撑 |
 | 设计 | [DESIGN](docs/02-设计说明书.md) 已成型；57 条决策见 [决策索引](docs/决策/README.md) |
 | **文本化验证** | ✅ 已实测通过（[EX-2026-10-14-textify](docs/实验/EX-2026-10-14-文本化.md)）：8 篇 eess.SY 论文，两条路线均产出 `paper.md` + `figures/`，47 张图 0 失败、691 条交叉引用被改写 |
-| 实施 | **M1 已落地、M0 未跑**；文本化流水线的取件-装配链已实现（`textify` 命令与落盘属 M2）；M3 的 skill bundle 已在 `skills/academic-search/`（`sync` 尚未接线）。初版范围收在「LLM 检索缓存层」（**M0–M3**）：六条用户命令 + `sync` / `verify` / `profile` 三条支撑命令，不接 Zotero，引用图谱在初版外（[ADR-0032](docs/决策/ADR-0032.md)、[ADR-0046](docs/决策/ADR-0046.md)）；`export`（含 `bundle` 别名）与 A/B/C 质量分级顺延出初版，只保留撤稿与黑名单硬排除（[ADR-0051](docs/决策/ADR-0051.md)）。设计缺口已补齐：适配层、载荷契约、派生文本通道与运行留档见 [ADR-0052](docs/决策/ADR-0052.md)–[ADR-0055](docs/决策/ADR-0055.md)；实现前的五处契约口径（`sync` 摘要载荷、三个检索命令都落池、`textify` 的 LaTeX 装配与 PDF 图渲染、`digest put` 的键校验、部分失败的退出码）见 [ADR-0056](docs/决策/ADR-0056.md) |
-| 阻塞项 | 无。M0 是**省钱前置**而非 M1 的阻塞（增量已有「回看 N 天 + 本地去重」兜底）；Zotero 写入通道顺延到 M5。日常约束是 OpenAlex 无 key 时每日额度 $0.10（[PLAN](docs/04-里程碑与计划.md)） |
+| 实施 | **M1 已落地、M0 部分完成**（免费 key 已配置并实测额度 `0.1` → `1`，见 [EX-2026-10-16-quota](docs/实验/EX-2026-10-16-额度.md)；增量口径 `Q1` 待测）；文本化流水线的取件-装配链已实现（`textify` 命令与落盘属 M2）；M3 的 skill bundle 已在 `skills/academic-search/`（`sync` 尚未接线）。初版范围收在「LLM 检索缓存层」（**M0–M3**）：六条用户命令 + `sync` / `verify` / `profile` 三条支撑命令，不接 Zotero，引用图谱在初版外（[ADR-0032](docs/决策/ADR-0032.md)、[ADR-0046](docs/决策/ADR-0046.md)）；`export`（含 `bundle` 别名）与 A/B/C 质量分级顺延出初版，只保留撤稿与黑名单硬排除（[ADR-0051](docs/决策/ADR-0051.md)）。设计缺口已补齐：适配层、载荷契约、派生文本通道与运行留档见 [ADR-0052](docs/决策/ADR-0052.md)–[ADR-0055](docs/决策/ADR-0055.md)；实现前的五处契约口径（`sync` 摘要载荷、三个检索命令都落池、`textify` 的 LaTeX 装配与 PDF 图渲染、`digest put` 的键校验、部分失败的退出码）见 [ADR-0056](docs/决策/ADR-0056.md) |
+| 阻塞项 | 无。M0 是**省钱前置**而非 M1 的阻塞（增量已有「回看 N 天 + 本地去重」兜底）；Zotero 写入通道顺延到 M5。日常约束是 OpenAlex 每日额度（本机已配免费 key，`$1`/天；无 key 只有 `$0.10`/天且按出口 IP 共享）（[PLAN](docs/04-里程碑与计划.md)） |
 
 ---
 
