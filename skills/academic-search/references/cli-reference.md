@@ -21,6 +21,7 @@
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
 | `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`；当前没有投影，效果等于 `meta` |
 | `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后 |
+| `--abstract` | 关闭（布尔开关） | 打开时每条附上摘要，截断到 `config/search.toml` 的 `abstract.chars`（默认 240）个字符。**不进 `spec_hash`**，所以不影响「同一检索式命中同一本 run 账本」。`lookup` 不受它约束——`lookup` 固定带完整摘要 |
 
 **用法清单（每条都实测过）：**
 
@@ -39,6 +40,9 @@ scripts/run.cmd search --all-of "world model" --any-of drone --source arxiv --li
 
 # e) 排序（引用数降序）
 scripts/run.cmd search --any-of "multi-agent" --sort citations --limit 20 --refresh false
+
+# f) 清单带上摘要片段，便于判断相关性（截断长度由 config/search.toml 的 abstract.chars 控制）
+scripts/run.cmd search --all-of "world model" --any-of drone --abstract --limit 10 --refresh false
 ```
 
 **坑（实测）：**
@@ -64,6 +68,7 @@ scripts/run.cmd lookup --doi 10.1109/mcse.2011.37 --refresh false
 scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh false
 ```
 
+- **`lookup` 固定带完整摘要**（`abstract` 字段，不截断、不需开关）：它本来就是「看确定的这一篇」，体积不构成顾虑，而判断一篇值不值得读正好需要摘要。`search` 找到候选后转 `lookup` 读摘要，是推荐的动线。
 - `--title` 走 FTS5 **短语**匹配（标题 + 摘要），取第一条命中，**不是模糊排序**。拼不准就改用 `search`。
 - 本地未命中且 `--refresh false` → `ok=false`、`error.code=not_found`（退出码 1）。换标识，或先 `search` 联网取。
 - `--doi` 入参会归一化，粘 `https://doi.org/...` 形式照样命中。
@@ -123,7 +128,14 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 
 `data` 除 `items` 外：`network`（本次是否发过请求）、`cost`（`{usd, basis, requests}`）；**本次联网刷新过**时另有 `counts`。离线查库时不出现。
 
-**条目里没有摘要**：摘要只作 FTS5 的索引源与 `content_hash` 的原像，条目与清单里都不出现。
+**摘要按需出现，不是每次都有**：`lookup` 固定带**完整**摘要；`search` 要打开 `--abstract` 才带，且是截断到 `abstract.chars` 的片段；不开时条目里**没有这个键**（不是 `null`），解析时按可缺席处理。
+
+**摘要不一定是可逐字引用的原文**——这是不提供来源标记的代价，必须心里有数：多篇成员的摘要不一致时按两级取值，先看**版本层级**（`published` > `preprint`），再看**文本保真度**（`arxiv` 原生 `<summary>` > `crossref` 原生 > `openalex` 由倒排索引还原）。因此：
+
+- 一篇只有预印本记录时，拿到的是**预印本稿**，可能与正式版不同（实测：9 组配对里 2 组实质变化，最坏 Jaccard 0.53，见 `docs/实验/EX-2026-10-14-身份与去重.md` §6）；
+- 经 OpenAlex 的摘要是 **`abstract_inverted_index` 的还原产物**（OpenAlex 因法律原因不提供纯文本摘要），词序与标点会有失真。
+
+**要引用摘要原文或照它翻译时，先回到 arXiv 摘要页或出版商页面核对。** 载荷里没有标记告诉你这条路有没有走过。
 
 ---
 
