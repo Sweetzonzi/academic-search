@@ -85,4 +85,7 @@ title: "设计决策索引"
 | [ADR-0057](ADR-0057.md) | 检索载荷的粒度 | `search` / `lookup` 条目只保证可溯源最小集，摘要与正文不进载荷；不做分页/计数，全库规模由 `--limit` 兜住 | partially superseded by ADR-0058 |
 | [ADR-0058](ADR-0058.md) | 摘要按需带出 | `lookup` 固定带完整摘要；`search` 新增 `--abstract`（默认关闭）带截断版，长度由 `search.toml` 的 `abstract.chars` 控制；多来源摘要按「版本层级 → 文本保真度」两级取值 | partially superseded by ADR-0059 |
 | [ADR-0059](ADR-0059.md) | 摘要截断默认值 | `search --abstract` 的 `[abstract] chars` 默认从 240 调到 800；契约措辞与 ADR-0058 其余决策不变 | accepted |
+| [ADR-0060](ADR-0060.md) | venue 判据 | 白名单与黑名单共用「载体 source id 集合 ∩ 名单 ≠ ∅」；会名到 S-id 的登记表随代码进版本库；远端改用 `locations.source.id:`，给定白名单时跳过 arXiv 腿 | accepted |
+| [ADR-0061](ADR-0061.md) | 找经典的阈值 | 新增 `--min-citations` 与 `--min-fwci`（同时给出取与）；远端 filter + 本地同条件、空值不通过；`--sort citations` 保持展示排序 | partially superseded by ADR-0062 |
+| [ADR-0062](ADR-0062.md) | `spec_hash` 的口径与取数页大小 | `spec_hash` = 远端请求的声明式参数（含 `--source` / `--sort` / 两个阈值）；解析后的日期与 `--limit` / `--abstract` / `--in` 不进；取数固定一页 100 条，`--limit` 只管展示 | accepted |
 
