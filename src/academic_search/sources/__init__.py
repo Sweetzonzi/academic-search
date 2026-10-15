@@ -44,10 +44,20 @@ def normalize_doi(value: str | None) -> str | None:
 
 @dataclass
 class SearchSpec:
-    """一次检索式；spec_hash 的规范化见 config.canonical_spec。"""
+    """一次检索式；spec_hash 的规范化见 config.canonical_spec。
+
+    `min_citations` / `min_fwci` 是「找经典」的两个下限（ADR-0061）：
+    两者同时给出取与；给任一条即跳过 arXiv 腿（那边没有被引数据）。
+    """
 
     all_of: list[str] = field(default_factory=list)
     any_of: list[str] = field(default_factory=list)
     venues: list[str] = field(default_factory=list)
     authors: list[str] = field(default_factory=list)
     since_years: int | None = None
+    min_citations: int | None = None
+    min_fwci: float | None = None
+
+    def classical_only(self) -> bool:
+        """是否给了任一引用阈值——给了就不该跑 arXiv 腿。"""
+        return self.min_citations is not None or self.min_fwci is not None

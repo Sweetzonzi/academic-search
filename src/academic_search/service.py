@@ -10,9 +10,9 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
-from . import config, envelope, group, htmlclean, paths, store, textify
+from . import config, envelope, group, htmlclean, paths, store, textify, venues
 from .sources import SearchSpec, SourceError, normalize_doi as source_normalize_doi
 from .sources import arxiv as arxiv_source
 from .sources import crossref as crossref_source
@@ -75,17 +75,40 @@ def _should_refresh(conn, spec_hash: str, mode: str, max_age_hours: int) -> bool
     return datetime.now(timezone.utc) - when > timedelta(hours=max_age_hours)
 
 
-def _fetch(client, source: str, spec: SearchSpec, *, limit: int,
-           from_date: str | None, to_date: str | None) -> list[dict]:
+def _resolve_names(names: Iterable[str], *, what: str) -> list[str]:
+    """会名列表 → 载体 source id 列表；解析不到即报错（ADR-0060 决策 2）。"""
+    ids, unknown = venues.resolve(names)
+    if unknown:
+        raise envelope.EnvelopeError(
+            envelope.INVALID_ARGS,
+            what + "里有登记表解析不到的名字：" + "、".join(unknown)
+            + "；登记表见 src/academic_search/venues.toml，也可直写 S… 逃生",
+        )
+    return ids
+
+
+def _fetch(client, source: str, spec: SearchSpec, *, sort: str,
+           from_date: str | None, to_date: str | None, venue_ids: Sequence[str]) -> list[dict]:
     if source == "openalex":
         return openalex_source.search(
-            client, spec, limit=limit, api_key=_api_key(),
-            from_date=from_date, to_date=to_date,
+            client, spec, api_key=_api_key(), sort=sort,
+            from_date=from_date, to_date=to_date, venue_ids=venue_ids,
         )
     if source == "arxiv":
-        return arxiv_source.search(client, spec, limit=limit,
-                                   from_date=from_date, to_date=to_date)
+        return arxiv_source.search(client, spec, from_date=from_date, to_date=to_date)
     raise SourceError(source, "该源不参与采集（初版仅 openalex / arxiv）", False)
+
+
+def _skip_legs(spec: SearchSpec, *, venue_ids: Sequence[str]) -> set[str]:
+    """哪些腿不参与本次采集。
+
+    - 给了 venue 白名单：arXiv 没有载体概念，取回来也判不了（ADR-0060 决策 5）；
+    - 给了任一引用阈值：arXiv 侧没有被引数据，放行等于不筛（ADR-0061 决策 4）。
+    两种情况都不报错，该腿在 `counts.by_source` 里如实记 0。
+    """
+    if venue_ids or spec.classical_only():
+        return {"arxiv"}
+    return set()
 
 
 def _fts_query(spec: SearchSpec) -> str:
@@ -133,12 +156,17 @@ def _body_work_keys(root, spec: SearchSpec) -> list[str]:
     return found
 
 
-def _venue_ok(item: dict, venues: Iterable[str]) -> bool:
-    whitelist = [group.normalize_venue(v) for v in venues if group.normalize_venue(v)]
-    if not whitelist:
-        return True
-    venue = group.normalize_venue(item.get("venue"))
-    return any(entry in venue for entry in whitelist)
+def _threshold_ok(item: dict, spec: SearchSpec) -> bool:
+    """本地按同一条件再判一次；空值不通过（ADR-0061 决策 3）。"""
+    if spec.min_citations is not None:
+        value = item.get("cited_by_count")
+        if value is None or value < spec.min_citations:
+            return False
+    if spec.min_fwci is not None:
+        value = item.get("fwci")
+        if value is None or value < spec.min_fwci:
+            return False
+    return True
 
 
 def _author_ok(item: dict, authors: Iterable[str]) -> bool:
@@ -184,17 +212,23 @@ def local_work_keys(
     return keys
 
 
-def _sorted_items(conn, keys, *, spec: SearchSpec, blacklist, sort: str, limit: int) -> list[dict]:
+def _sorted_items(
+    conn, keys, *, spec: SearchSpec, blocked_venues, venue_ids, sort: str, limit: int
+) -> list[dict]:
     items = []
     for key in keys:
-        if group.work_is_excluded(conn, key, blacklist):
+        if group.work_is_excluded(conn, key, blocked_venues):
+            continue
+        # 白名单与黑名单同一条判据：载体 source id 集合 ∩ 名单（ADR-0060 决策 1）。
+        # 载体集合为空即不通过——fail-open 会让阈值与名单一起失去意义。
+        if venue_ids and not venues.hits(group.work_carriers(conn, key), venue_ids):
             continue
         item = store.aggregate_work(conn, key)
         if item is None or item["is_retracted"]:
             continue
-        if not _venue_ok(item, spec.venues):
-            continue
         if not _author_ok(item, spec.authors):
+            continue
+        if not _threshold_ok(item, spec):
             continue
         items.append(item)
     if sort == "citations":
@@ -243,7 +277,7 @@ def run_search(
     lookback_days: int | None = None,
     sort: str = "date",
     in_scope: str = "meta",
-    blacklist: Iterable[str] = (),
+    venue_blacklist: Iterable[str] = (),
     abstract: bool = False,
     abstract_chars: int = config.DEFAULT_ABSTRACT_CHARS,
     client=None,
@@ -251,11 +285,17 @@ def run_search(
 ) -> Outcome:
     root = str(root)
     sources = list(sources)
+    # 名单先解析：写库之前就要知道这次能不能跑（ADR-0060 决策 2）
+    venue_ids = _resolve_names(spec.venues, what="venue 白名单")
+    blocked_venues = _resolve_names(venue_blacklist, what="venue 黑名单")
+    skipped = _skip_legs(spec, venue_ids=venue_ids)
     conn = store.connect(config.db_path(root))
     try:
         spec_key = config.spec_hash(
             all_of=spec.all_of, any_of=spec.any_of, venues=spec.venues,
             authors=spec.authors, since_years=spec.since_years,
+            sources=sources, sort=sort,
+            min_citations=spec.min_citations, min_fwci=spec.min_fwci,
         )
         from_date, to_date = config.date_window(
             since_years=spec.since_years, lookback_days=lookback_days, today=today
@@ -276,9 +316,13 @@ def run_search(
             dedup_blocked = 0
             wrote_anything = False
             for source in sources:
+                if source in skipped:
+                    by_source[source] = 0
+                    continue
                 try:
-                    records = _fetch(client, source, spec, limit=limit,
-                                     from_date=from_date, to_date=to_date)
+                    records = _fetch(client, source, spec, sort=sort,
+                                     from_date=from_date, to_date=to_date,
+                                     venue_ids=venue_ids)
                 except SourceError as exc:
                     failures.append({"source": source, "reason": exc.reason})
                     by_source[source] = 0
@@ -288,7 +332,8 @@ def run_search(
                     wrote_anything = True
                 with store.write_tx(conn):
                     for record in records:
-                        result = group.ingest(conn, record, run_id=run_id, blacklist=blacklist)
+                        result = group.ingest(conn, record, run_id=run_id,
+                                              blocked_venues=blocked_venues)
                         if result.new_candidate:
                             new_candidates += 1
                         if result.dedup_level:
@@ -299,7 +344,10 @@ def run_search(
                 "by_source": by_source,
                 "failures": failures,
             }
-            all_failed = bool(failures) and len(failures) == len(sources) and not wrote_anything
+            # 「全失败」只对**真的发过请求**的腿成立：被跳过的腿不算失败，
+            # 否则带上白名单的查询会连「一条都没取到」都被记成 ok。
+            attempted = [s for s in sources if s not in skipped]
+            all_failed = bool(failures) and len(failures) == len(attempted) and not wrote_anything
             with store.write_tx(conn):
                 store.finish_run(
                     conn, run_id, status="failed" if all_failed else "ok", requests=client.requests,
@@ -332,7 +380,8 @@ def run_search(
             in_scope=in_scope, root=root,
         )
         outcome.items = _shape_abstracts(
-            _sorted_items(conn, keys, spec=spec, blacklist=blacklist, sort=sort, limit=limit),
+            _sorted_items(conn, keys, spec=spec, blocked_venues=blocked_venues,
+                          venue_ids=venue_ids, sort=sort, limit=limit),
             include=abstract,
             chars=abstract_chars,
         )
@@ -349,10 +398,12 @@ def run_lookup(
     title: str | None = None,
     refresh: str = "auto",
     limit: int = 20,
-    blacklist: Iterable[str] = (),
+    venue_blacklist: Iterable[str] = (),
+    mailto: str | None = None,
     client=None,
 ) -> Outcome:
     root = str(root)
+    blocked_venues = _resolve_names(venue_blacklist, what="venue 黑名单")
     conn = store.connect(config.db_path(root))
     try:
         outcome = Outcome()
@@ -384,7 +435,7 @@ def run_lookup(
                 except SourceError as exc:
                     failures.append({"source": "openalex", "reason": exc.reason})
                 try:
-                    found = crossref_source.lookup(client, doi)
+                    found = crossref_source.lookup(client, doi, mailto=mailto)
                     if found:
                         records.append(found)
                 except SourceError as exc:
@@ -405,7 +456,8 @@ def run_lookup(
                 run_id = store.start_run(conn, spec_hash=None, query_name=None, refreshed=True,
                                          window_from=None, window_to=None)
                 for record in records:
-                    result = group.ingest(conn, record, run_id=run_id, blacklist=blacklist)
+                    result = group.ingest(conn, record, run_id=run_id,
+                                          blocked_venues=blocked_venues)
                     work_key = result.work_key
                 store.finish_run(conn, run_id, status="ok", requests=client.requests,
                                  cost_usd=client.cost_usd, cost_basis=client.cost_basis,
@@ -417,7 +469,7 @@ def run_lookup(
             outcome.counts = {"new_candidates": 0, "dedup_blocked": 0,
                               "by_source": {}, "failures": failures}
 
-        if work_key is not None and not group.work_is_excluded(conn, work_key, blacklist):
+        if work_key is not None and not group.work_is_excluded(conn, work_key, blocked_venues):
             item = store.aggregate_work(conn, work_key)
             if item and not item["is_retracted"]:
                 outcome.items = [item]

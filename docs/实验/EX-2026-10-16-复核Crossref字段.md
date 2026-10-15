@@ -79,3 +79,5 @@ curl.exe -s "https://api.crossref.org/works/10.1038/s41586-020-2649-2?mailto=you
 # 反例：Crossref 里没有
 curl.exe -s -o NUL -w "%{http_code}`n" "https://api.crossref.org/works/10.48550/arXiv.1803.10122"
 ```
+
+**(h) 四处偏差落地后的样子（2026-10-16 追加）。** (c) 记的四处已经改完，实测结果记在 [EX-2026-10-16-source-contract](EX-2026-10-16-检索口径与来源校验.md) §16(c)：`title` / `container-title` 剥标记并折叠空白、摘要里的 `jats:title` 整段删掉、`mailto` 进查询串与 `User-Agent`。本节 (c) 第 3 条提到的 `normalize_venue()` **已随 [ADR-0060](../决策/ADR-0060.md) 删除**——venue 名单不再比对名字字符串，改判「载体 source id 集合 ∩ 名单」；`venue` 列仍按原文落库，它只用于展示。

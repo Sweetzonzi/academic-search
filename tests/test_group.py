@@ -98,12 +98,63 @@ def test_paratext_excluded(conn):
     assert r.excluded is True
 
 
-def test_venue_blacklist_is_normalized_containment(conn):
-    r = ingest(conn, rec(type="article", venue="Journal of Predatory Press Inc."),
-               blacklist=["predatory press"])
+def test_venue_blacklist_matches_carrier_ids(conn):
+    """黑名单与白名单同一条判据：载体 source id 集合 ∩ 名单（ADR-0060 决策 1）。"""
+    r = ingest(conn, rec(type="article", venue="ICRA",
+                         venue_source_ids=["S4210217939"]),
+               blocked_venues=["S4210217939"])
     assert r.excluded is True
-    assert group.venue_blacklisted("Journal of Predatory Press", ["Predatory  Press"]) is True
-    assert group.venue_blacklisted("ICRA", ["predatory"]) is False
+
+
+def test_venue_blacklist_ignores_venue_string(conn):
+    """venue 字符串不再参与判定——名字写得再像也不再靠子串命中（ADR-0060 决策 4）。"""
+    r = ingest(conn, rec(type="article", venue="Journal of Predatory Press Inc."),
+               blocked_venues=["s999999"])
+    assert r.excluded is False
+
+
+def test_l1_bridge_content_mismatch_does_not_group(conn):
+    """上游拼记录：桥与内容不符 → 不归组，别名归真正的持有者、原持有者标冲突。
+
+    复现 EX-2026-10-16-source-contract §7 的形状：一条 OpenAlex 记录的 `locations[]`
+    里挂着别人的 arXiv id，标题却是另一篇（ADR-0064 决策 3–4）。
+    """
+    chimera = ingest(conn, rec(source_id="W1", title="VOLE-Field Zenodo doc",
+                               published_at="2018-03-27",
+                               bridges=[("arxiv", "1803.10122")]))
+    assert store.ident_row(conn, "arxiv", "1803.10122")["kind"] == "bridge"
+    real = ingest(conn, rec(source="arxiv", source_id="1803.10122", title="World Models",
+                            published_at="2018-03-27", idents=[("arxiv", "1803.10122")]))
+    assert real.work_key != chimera.work_key
+    assert real.dedup_level is None
+    assert store.get_record(conn, chimera.record_uid)["metadata_conflict"] == 1
+    holder = store.ident_row(conn, "arxiv", "1803.10122")
+    assert holder["record_uid"] == real.record_uid
+    assert holder["kind"] == "ident"
+
+
+def test_l1_bridge_takes_over_when_content_matches(conn):
+    """桥可被真正的持有者接管：先写者不再永久占位（ADR-0064 决策 3/5）。"""
+    claim = ingest(conn, rec(source_id="W1", bridges=[("arxiv", "2401.00009")]))
+    owner = ingest(conn, rec(source="arxiv", source_id="2401.00009",
+                             idents=[("arxiv", "2401.00009")]))
+    assert owner.work_key == claim.work_key
+    assert owner.dedup_level == "L1"
+    holder = store.ident_row(conn, "arxiv", "2401.00009")
+    assert holder["record_uid"] == owner.record_uid
+    assert holder["kind"] == "ident"
+
+
+def test_bridge_declarer_is_flagged_when_claim_is_wrong(conn):
+    """两条记录都只是「声明」时，内容不符由**后来的声明者**背冲突，别名不动。"""
+    first = ingest(conn, rec(source_id="W1", title="Alpha", bridges=[("doi", "10.1/x")]))
+    second = ingest(conn, rec(source_id="W2", title="Beta", bridges=[("doi", "10.1/x")]))
+    assert first.work_key != second.work_key
+    assert store.get_record(conn, second.record_uid)["metadata_conflict"] == 1
+    assert store.get_record(conn, first.record_uid)["metadata_conflict"] is None
+    holder = store.ident_row(conn, "doi", "10.1/x")
+    assert holder["record_uid"] == first.record_uid
+    assert holder["kind"] == "bridge"
 
 
 def test_l2_registers_without_grouping(conn):

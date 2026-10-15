@@ -90,6 +90,7 @@ def test_load_search_defaults(tmp_path):
     assert cfg.abstract_chars == 800
     assert cfg.min_grade == "B"
     assert cfg.venue_blacklist == []
+    assert cfg.mailto is None
 
 
 def test_abstract_chars_falls_back_without_config(tmp_path):
@@ -104,7 +105,8 @@ def test_load_search_overrides(tmp_path):
         config.SEARCH,
         "[refresh]\nmax_age_hours = 6\n[sync]\nlookback_days = 7\n"
         "[quality]\nmin_grade = \"A\"\nvenue_blacklist = [\"Predatory Press\"]\n"
-        "[abstract]\nchars = 100\n",
+        "[abstract]\nchars = 100\n"
+        "[contact]\nmailto = \"me@example.com\"\n",
     )
     cfg = config.load_search(tmp_path)
     assert cfg.max_age_hours == 6
@@ -112,6 +114,41 @@ def test_load_search_overrides(tmp_path):
     assert cfg.min_grade == "A"
     assert cfg.venue_blacklist == ["Predatory Press"]
     assert cfg.abstract_chars == 100
+    assert cfg.mailto == "me@example.com"
+
+
+def test_spec_hash_covers_only_remote_request_params():
+    """`spec_hash` 的判据只有一条：它改不改变远端请求（ADR-0062 决策 1–3）。"""
+    base = {"all_of": ["world model"], "sources": ["openalex"], "sort": "date"}
+    same = config.spec_hash(**base)
+    # 归一化：大小写、顺序、前后空白都不该改变 hash（ADR-0043）
+    assert same == config.spec_hash(all_of=[" World Model "], sources=["OpenAlex"], sort="date")
+    for changed in (
+        {"sort": "citations"},
+        {"sources": ["arxiv"]},
+        {"min_citations": 100},
+        {"min_fwci": 2.0},
+        {"from_date": "2024-01-01"},
+        {"venues": ["ICRA"]},
+    ):
+        assert config.spec_hash(**dict(base, **changed)) != same, changed
+
+
+def test_spec_hash_ignores_resolved_dates_and_display_flags():
+    """`--limit` / `--abstract` / `--in` 不进 hash；算出来的日期也不进（ADR-0062 决策 4）。"""
+    base = dict(all_of=["a"], sources=["openalex"], sort="date")
+    assert config.spec_hash(**base) == config.spec_hash(**dict(base, min_citations=None))
+    # 只有**显式给**的窗口才进 hash：与「解析后的具体日期」是两件事
+    assert config.spec_hash(**base) == config.spec_hash(**dict(base, from_date=None))
+    assert config.spec_hash(**dict(base, from_date="2024-01-01")) != config.spec_hash(
+        **dict(base, from_date="2024-01-02")
+    )
+
+
+def test_canonical_spec_is_stable_json():
+    value = config.canonical_spec(all_of=["b", "a"], sort="date")
+    assert value == config.canonical_spec(all_of=["A", "b"], sort="date")
+    assert '"all_of":["a","b"]' in value
 
 
 def test_load_sources_defaults_and_override(tmp_path):

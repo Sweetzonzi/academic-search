@@ -43,6 +43,14 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--in", choices=["meta", "body", "both"], default="meta", dest="in_scope")
     search.add_argument("--sort", choices=["citations", "date"], default="date")
     search.add_argument(
+        "--min-citations", type=int, default=None, metavar="N",
+        help="原始被引下限（远端 filter + 本地同判；给了就跳过 arXiv 腿）",
+    )
+    search.add_argument(
+        "--min-fwci", type=float, default=None, metavar="X",
+        help="领域归一化被引下限；与 --min-citations 同时给出时取与",
+    )
+    search.add_argument(
         "--abstract", action="store_true",
         help="条目附上摘要，截断到 search.toml 的 abstract.chars（默认 800）",
     )
@@ -80,11 +88,13 @@ def _dispatch(args, name: str):
             venues=list(args.venue),
             authors=list(args.author),
             since_years=args.since_years,
+            min_citations=args.min_citations,
+            min_fwci=args.min_fwci,
         )
         outcome = service.run_search(
             root, spec, limit=args.limit, sources=sources, refresh=args.refresh,
             max_age_hours=int(args.max_age) if args.max_age else cfg.max_age_hours,
-            sort=args.sort, in_scope=args.in_scope, blacklist=cfg.venue_blacklist,
+            sort=args.sort, in_scope=args.in_scope, venue_blacklist=cfg.venue_blacklist,
             abstract=args.abstract, abstract_chars=cfg.abstract_chars,
         )
         return outcome.payload(), 0
@@ -95,7 +105,8 @@ def _dispatch(args, name: str):
             raise envelope.EnvelopeError(envelope.INVALID_ARGS, "必须给 --doi / --arxiv / --title 之一")
         outcome = service.run_lookup(
             root, doi=args.doi, arxiv_id=args.arxiv, title=args.title,
-            refresh=args.refresh, limit=args.limit, blacklist=cfg.venue_blacklist,
+            refresh=args.refresh, limit=args.limit, venue_blacklist=cfg.venue_blacklist,
+            mailto=cfg.mailto,
         )
         return outcome.payload(), 0
 

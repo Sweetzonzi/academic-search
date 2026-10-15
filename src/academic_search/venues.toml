@@ -1,0 +1,56 @@
+# 会名 / 载体名 → OpenAlex source id 的登记表（ADR-0060 决策 2）。
+#
+# 为什么在包内而不在 config/：config/ 是各人一份、不进版本库的用户配置；
+# 而这张表每一条都要人工确认过——会议缩写不出现在载体名里，全称片段一次又返回
+# 几十个候选，所以「会名 → S-id」不能靠字符串自动解析（见
+# docs/实验/EX-2026-10-16-检索口径与来源校验.md §11(d)(e)）。
+#
+# 写 `S…` 作为会名是被允许的；那是未登记载体的逃生门（ADR-0060 决策 2）。
+# 解析不到的名字**报错**，不静默失效。
+#
+# ids 的确认路径：experiments/m1.5/26_venue_source_ids.py
+# （`list` 列候选 → `show` 看逐年覆盖 → `count` 核当年作品数）。
+# 数字与「哪些会登记不上」记在同份 EX 的 §16。
+
+[[venue]]
+name = "ICRA"
+ids  = ["S4210217939"]
+note = "Proceedings - IEEE International Conference on Robotics and Automation；系列级实体，32 827 篇，2023–2026 每年 1347–1882 篇"
+
+[[venue]]
+name = "IROS"
+ids  = ["S4363608614"]
+note = "IEEE/RSJ International Conference on Intelligent Robots and Systems；26 305 篇，2024 年 1587 篇。另有一个 0 篇的同名 proceedings 实体 S4393918188，不登记"
+
+[[venue]]
+name = "RA-L"
+ids  = ["S4210169774"]
+note = "IEEE Robotics and Automation Letters；11 633 篇，2024 年 1551 篇"
+
+[[venue]]
+name = "NeurIPS"
+ids  = ["S4363606243"]
+note = "neural information processing systems（载体名是全小写）；19 928 篇，2024 年 4494 篇"
+
+[[venue]]
+name = "ICML"
+ids  = ["S4306419644"]
+note = "International Conference on Machine Learning；**覆盖不完整**：共 2001 篇，2021 年按 locations. 数到 530 篇，PMLR 卷下的作品不在这个实体里（未查证）"
+
+[[venue]]
+name = "ICLR"
+ids  = ["S4306419637"]
+note = "International Conference on Learning Representations；**覆盖不完整**：共 609 篇，2021 年按 locations. 数到 244 篇"
+
+[[venue]]
+name = "arXiv"
+ids  = ["S4306400194"]
+note = "arXiv (Cornell University)；repository，1 469 849 篇。本地判据还要靠 [[source_carrier]]，因为 arXiv 记录没有 locations[]"
+
+# 来源命名空间自身的载体：由该来源入库的记录，其载体集合里自动含这些 id。
+# arXiv 侧记录没有 `locations[]`，但「这篇挂在 arXiv 上」是明确事实，
+# 少了这一条 `--venue arXiv` 永远命中不了 arXiv 记录。
+[[source_carrier]]
+source = "arxiv"
+ids    = ["S4306400194"]
+note   = "PLAN §2 的 ADR-0060 验收判据之一：`--venue arXiv --refresh false` 必须命中 > 0"

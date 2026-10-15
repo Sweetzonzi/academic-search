@@ -10,11 +10,15 @@ import json
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
-from . import contenthash, identity, store
+from . import identity, store, venues
 
 #: 预印本 → 正式版年份窗口 [-1, +10]（DESIGN §4.2.3）。
 YEAR_BACK = 10
 YEAR_FORWARD = 1
+
+#: L1 归组前的内容校验允许的年份差。预印本与正式版跨年是常态
+#: （DESIGN §4.2.3 的年份窗口本身就承认这一点），差到 2 年才算冲突。
+YEAR_TOLERANCE = 1
 
 
 @dataclass
@@ -28,23 +32,6 @@ class IngestResult:
     excluded: bool
 
 
-def normalize_venue(venue: str | None) -> str:
-    """venue 归一化：剥标记 + NFKC + 连字符/引号统一 + 折叠空白 + 小写。"""
-    return contenthash.normalize_source_text(venue or "", "venue").lower()
-
-
-def venue_blacklisted(venue: str | None, blacklist: Iterable[str]) -> bool:
-    """黑名单按归一化后的包含判断（IFACE-SOURCE §5、USAGE-配置 §3）。"""
-    normalized = normalize_venue(venue)
-    if not normalized:
-        return False
-    for entry in blacklist:
-        needle = normalize_venue(entry)
-        if needle and needle in normalized:
-            return True
-    return False
-
-
 def _field(record, key):
     """同时兼容 dict 与 sqlite3.Row 的取值。"""
     try:
@@ -53,20 +40,32 @@ def _field(record, key):
         return None
 
 
-def record_is_excluded(record, blacklist: Iterable[str] = ()) -> bool:
-    """初版的纯规则硬排除：撤稿 / paratext / venue 黑名单。"""
+def record_is_excluded(record, blocked_venues: Iterable[str] = ()) -> bool:
+    """初版的纯规则硬排除：撤稿 / paratext / venue 黑名单。
+
+    `blocked_venues` 是**已解析的载体 source id**（`venues.resolve()` 的产物），
+    判据与白名单同为「作品载体集合 ∩ 名单 ≠ ∅」（ADR-0060 决策 1、6）。
+    """
     if _field(record, "is_retracted"):
         return True
     if (_field(record, "type") or "") == "paratext":
         return True
-    return venue_blacklisted(_field(record, "venue"), blacklist)
+    return venues.hits(venues.record_carriers(record), blocked_venues)
 
 
-def work_is_excluded(conn, work_key: str, blacklist: Iterable[str] = ()) -> bool:
+def work_is_excluded(conn, work_key: str, blocked_venues: Iterable[str] = ()) -> bool:
     for member in store.member_records(conn, work_key):
-        if record_is_excluded(member, blacklist):
+        if record_is_excluded(member, blocked_venues):
             return True
     return False
+
+
+def work_carriers(conn, work_key: str) -> set[str]:
+    """一个 work 的载体 source id 集合 = 各成员载体集合的并集（ADR-0060 决策 1）。"""
+    found: set[str] = set()
+    for member in store.member_records(conn, work_key):
+        found |= venues.record_carriers(member)
+    return found
 
 
 def _choose_keep(conn, work_keys: Sequence[str]) -> str:
@@ -163,18 +162,54 @@ def _ident(ns, value):
     return ns, identity.normalize_source_id(ns, value)
 
 
+def _same_paper(mine: Mapping, theirs) -> bool:
+    """L1 归组前的内容校验：标题 + 年份 + 首作者（IFACE-SOURCE §8、DESIGN §4.1）。
+
+    任一项两侧都有值且不相同即判「不是同一篇」；**一侧缺值则该侧不参与**——
+    缺字段是常态，拿它当否决依据会把正常的 L1 归组整片挡掉。
+    标题比的是归一化后的 `title_key`，所以「`<scp>` 没剥干净」这类差异不会误判。
+    """
+    for column in ("title_key", "first_author_surname"):
+        ours, others = mine.get(column), _field(theirs, column)
+        if ours and others and ours != others:
+            return False
+    try:
+        year_a = int(str(mine.get("published_at") or "")[:4])
+        year_b = int(str(_field(theirs, "published_at") or "")[:4])
+    except ValueError:
+        return True
+    return abs(year_a - year_b) <= YEAR_TOLERANCE
+
+
+def _bridge_verdict(mine: Mapping, theirs, *, holder_kind: str, declared_as_ident: bool) -> str:
+    """一条别名两侧内容比对后的动作（ADR-0064 决策 3–4）。
+
+    - `group`：内容一致 → 归组；
+    - `usurp`：内容不符，且**本记录**持有的是事实（`ident`）、对面只是声明（`bridge`）
+      → 别名移交本记录、原持有者标 `metadata_conflict`、不归组；
+    - `conflict`：内容不符，且错的是**本记录**的声明 → 标本记录、不归组。
+    """
+    if _same_paper(mine, theirs):
+        return "group"
+    if declared_as_ident and holder_kind == "bridge":
+        return "usurp"
+    return "conflict"
+
+
 def ingest(
     conn,
     record: Mapping,
     *,
     run_id: int | None,
     refreshed: bool = True,
-    blacklist: Iterable[str] = (),
+    blocked_venues: Iterable[str] = (),
 ) -> IngestResult:
     """把一条来源结果落库、分组、入池，并登记 L2 待确认。
 
     record 至少含 source / source_id；可选 idents（强标识，L0）与
     bridges（显式桥，L1），两者都是 (ns, value) 列表。
+
+    `blocked_venues` 是已解析的载体 source id 列表（`venues.resolve()` 的产物）。
     """
     source = record["source"]
     source_id = record["source_id"]
@@ -206,24 +241,63 @@ def ingest(
         level = None
     else:
         matched: list[str] = []
+        takeovers: list[tuple[str, str]] = []
+        conflicts: list[str] = []
+        self_conflict = False
         level = None
-        for ns, value in idents:
-            for other in store.record_uids_by_ident(conn, ns, value):
-                other_work = store.member_work(conn, other)
-                if other_work:
-                    matched.append(store.resolve_work(conn, other_work))
-                    level = "L0"
-        for ns, value in bridges:
-            for other in store.record_uids_by_ident(conn, ns, value):
-                other_work = store.member_work(conn, other)
-                if other_work:
-                    matched.append(store.resolve_work(conn, other_work))
-                    if level is None:
-                        level = "L1"
+
+        # 每一侧都要和一个已有的别名持有者比内容：`declared_as_ident` 决定
+        # 「内容不符时谁是真的持有者」（ADR-0064 决策 3）。
+        for declared_as_ident, pairs in ((True, idents), (False, bridges)):
+            for ns, value in pairs:
+                holder = store.ident_row(conn, ns, value)
+                if holder is None or holder["record_uid"] == uid:
+                    continue
+                other_uid = holder["record_uid"]
+                other_work = store.member_work(conn, other_uid)
+                theirs = store.get_record(conn, other_uid)
+                if theirs is None:
+                    continue
+                if declared_as_ident and holder["kind"] == "ident":
+                    # 两边都以事实持有同一别名：L0 归组，不做内容校验
+                    # （ADR-0064 决策 1 的范围只到桥触发的 L1）
+                    if other_work:
+                        matched.append(store.resolve_work(conn, other_work))
+                        if level is None:
+                            level = "L0"
+                    continue
+                verdict = _bridge_verdict(
+                    row, theirs, holder_kind=holder["kind"], declared_as_ident=declared_as_ident
+                )
+                if verdict == "group":
+                    if declared_as_ident and holder["kind"] == "bridge":
+                        takeovers.append((ns, value))
+                    if other_work:
+                        matched.append(store.resolve_work(conn, other_work))
+                        if level is None:
+                            level = "L1"
+                elif verdict == "usurp":
+                    takeovers.append((ns, value))
+                    conflicts.append(other_uid)
+                else:
+                    self_conflict = True
+
         row["record_uid"] = uid
         row["first_run_id"] = run_id
         row["last_seen_at"] = now
         store.insert_record(conn, row)
+        # 别名的写入顺序在插入之后：接管要满足 record_ident → record 的外键
+        for ns, value in idents:
+            store.upsert_ident(conn, ns, value, uid, kind="ident")
+        for ns, value in bridges:
+            store.upsert_ident(conn, ns, value, uid, kind="bridge")
+        for ns, value in takeovers:
+            store.take_over_ident(conn, ns, value, uid)
+        for other_uid in conflicts:
+            store.mark_metadata_conflict(conn, other_uid)
+        if self_conflict:
+            store.mark_metadata_conflict(conn, uid)
+
         if matched:
             work_key = _choose_keep(conn, matched)
             for other_work in sorted(set(matched)):
@@ -234,10 +308,8 @@ def ingest(
             work_key = uid
             store.create_work(conn, uid)
             store.add_member(conn, uid, uid, "primary")
-        for ns, value in idents + bridges:
-            store.upsert_ident(conn, ns, value, uid)
 
-    excluded = work_is_excluded(conn, work_key, blacklist)
+    excluded = work_is_excluded(conn, work_key, blocked_venues)
     new_candidate = False
     if not excluded and not store.candidate_exists(conn, work_key):
         new_candidate = store.add_candidate(conn, work_key, run_id)

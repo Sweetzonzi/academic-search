@@ -15,6 +15,10 @@ ARXIV = "{http://arxiv.org/schemas/atom}"
 _VERSION_RE = re.compile(r"v\d+$", re.IGNORECASE)
 _ABS_RE = re.compile(r"abs/([^/?#]+)")
 
+#: 一次远端取数固定取一页 100 条（ADR-0062 决策 5）；`--limit` 只截断展示。
+#: arXiv 单次响应上限 2000，这里取与 OpenAlex 同一个页大小，两源口径一致。
+FETCH_PAGE = 100
+
 
 def _text(element, path: str) -> str | None:
     found = element.find(path)
@@ -86,7 +90,6 @@ def search(
     client,
     spec: SearchSpec,
     *,
-    limit: int,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> list[dict]:
@@ -98,7 +101,7 @@ def search(
         {
             "search_query": query,
             "start": 0,
-            "max_results": min(max(limit, 1), 2000),
+            "max_results": FETCH_PAGE,
             "sortBy": "submittedDate",
             "sortOrder": "descending",
         },

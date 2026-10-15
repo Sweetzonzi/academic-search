@@ -1,6 +1,6 @@
 ---
 name: academic-search
-description: 本地优先的文献检索缓存层。本 skill 用于先在本地库里查、缺了才联网 arXiv / OpenAlex、结果一律带出处的检索场景。当用户问「这个方向有没有人做过」「找某篇论文」「最近有什么新论文」「本地库里现在有哪些论文」「某篇的 DOI / 摘要 / 引用」时应使用它。
+description: 本地优先的文献检索缓存层。本 skill 用于先在本地库里查、缺了才联网 arXiv / OpenAlex、结果一律带出处的检索场景。当用户问「这个方向有没有人做过」「找某篇论文」「最近有什么新论文」「这个方向的经典 / 高被引论文」「某个会议或期刊上有哪些相关工作」「本地库里现在有哪些论文」「某篇的 DOI / 摘要 / 引用」时应使用它。
 agent_created: true
 ---
 
@@ -27,6 +27,8 @@ agent_created: true
 | 看**本地库里**已经有什么（不联网、零成本） | `search` 不给检索式 + `--refresh false` |
 | 拿到确定的某一篇 | `lookup --doi` / `--arxiv` / `--title` 三选一 |
 | 某个方向的最新进展 | 现阶段只有 `search --refresh true`（`sync` 未接线） |
+| 某个方向的**经典 / 高被引**论文 | `search --min-citations N`（或 `--min-fwci X` 跨领域比）；这两个是**取数条件**，会多花一次请求，但带回的是「被引最高的一批」 |
+| **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给会名；名字要在登记表里（`ICRA` / `IROS` / `RA-L` / `NeurIPS` / `ICML` / `ICLR` / `arXiv`），**解析不到会报错**。给了它会跳过 arXiv 腿 |
 | `config/profile.toml` 能不能用 | `profile check` |
 
 **失败分支（比选对命令更容易出错的地方）：**
@@ -49,7 +51,7 @@ agent_created: true
 | `version` | 版本与 `schema` 版本 | 可用 |
 | `sync` / `textify` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 契约已定、实现未到 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。现在要新论文用 `search --refresh true` |
 
-**术语**：**具名查询**指 `config/profile.toml` 里的一条 `[[query]]`（名字 + 检索式 + 年份窗），**不是**「按标题查论文」——后者是 `lookup --title`。`search` 不接受按名字跑具名查询；要把那条拿来用，就把它的字段原样抄到命令上——`spec_hash` 只由那几个字段决定，抄全了就是同一次检索、命中同一本 run 账本。
+**术语**：**具名查询**指 `config/profile.toml` 里的一条 `[[query]]`（名字 + 检索式 + 年份窗），**不是**「按标题查论文」——后者是 `lookup --title`。`search` 不接受按名字跑具名查询；要把那条拿来用，就把它的字段原样抄到命令上——`spec_hash` 只由会改变远端请求的那几个参数决定（`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / 两个阈值），抄全了就是同一次检索、命中同一本 run 账本。
 
 ## 4. 没有 `config/profile.toml` 时怎么办
 

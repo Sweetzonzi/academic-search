@@ -112,6 +112,7 @@ class SearchConfig:
     abstract_chars: int = DEFAULT_ABSTRACT_CHARS
     min_grade: str = DEFAULT_MIN_GRADE
     venue_blacklist: list[str] = field(default_factory=list)
+    mailto: str | None = None
 
 
 def config_dir(root: str | Path) -> Path:
@@ -262,6 +263,9 @@ def load_search(root: str | Path) -> SearchConfig:
         sync = raw.get("sync") or {}
         quality = raw.get("quality") or {}
         abstract = raw.get("abstract") or {}
+        contact = raw.get("contact") or {}
+        if isinstance(contact, dict) and contact.get("mailto"):
+            cfg.mailto = str(contact["mailto"]).strip() or None
         if isinstance(refresh, dict) and "max_age_hours" in refresh:
             cfg.max_age_hours = int(refresh["max_age_hours"])
         if isinstance(sync, dict) and "lookback_days" in sync:
@@ -315,8 +319,19 @@ def canonical_spec(
     venues: list[str] | tuple[str, ...] = (),
     authors: list[str] | tuple[str, ...] = (),
     since_years: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    sources: list[str] | tuple[str, ...] = (),
+    sort: str | None = None,
+    min_citations: int | None = None,
+    min_fwci: float | None = None,
 ) -> str:
-    """检索式的规范形式：字段排序、大小写归一、关键词排序（ADR-0043）。"""
+    """检索式的规范形式：字段排序、大小写归一、关键词排序（ADR-0043）。
+
+    收哪几个参数只有一条判据——**它改不改变远端请求**（ADR-0062 决策 1–3）。
+    因此 `--limit` / `--abstract` / `--in` 不在这里；`from_date` / `to_date`
+    只接**显式给出**的窗口，接一个算出来的日期会让 hash 每天变一次（决策 4）。
+    """
 
     def norm(values) -> list[str]:
         return sorted({str(v).strip().lower() for v in values if str(v).strip()})
@@ -328,6 +343,12 @@ def canonical_spec(
             "venues": norm(venues),
             "authors": norm(authors),
             "since_years": since_years,
+            "from": from_date,
+            "to": to_date,
+            "sources": norm(sources),
+            "sort": sort,
+            "min_citations": min_citations,
+            "min_fwci": min_fwci,
         },
         ensure_ascii=False,
         sort_keys=True,

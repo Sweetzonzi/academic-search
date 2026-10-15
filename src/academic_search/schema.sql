@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS record (
     published_at    TEXT,                       -- YYYY-MM-DD
     updated_at      TEXT,
     type            TEXT,                       -- 规范值（IFACE-SOURCE §4）
-    venue           TEXT,
+    venue           TEXT,                       -- 主载体名，**只用于展示**
+    venue_source_ids TEXT,                      -- 载体 source id 集合（JSON 数组，ADR-0060）
     language        TEXT,
     title_key       TEXT,                       -- 派生缓存，永不进唯一约束
     first_author_surname TEXT,
@@ -35,10 +36,14 @@ CREATE TABLE IF NOT EXISTS record (
 );
 
 -- §3.2 record_ident：标识别名
+-- kind 区分「事实」与「声明」（ADR-0064 决策 2）：来源自带、可当事实用的写 ident；
+-- sources 从 locations[] 取来的桥写 bridge。ident 先写者占位、不可改；
+-- bridge 可被真正的持有者接管（接管在 group.ingest() 里校验后执行）。
 CREATE TABLE IF NOT EXISTS record_ident (
     ns          TEXT NOT NULL,
     value       TEXT NOT NULL,
     record_uid  TEXT NOT NULL REFERENCES record(record_uid),
+    kind        TEXT NOT NULL DEFAULT 'ident' CHECK (kind IN ('ident', 'bridge')),
     PRIMARY KEY (ns, value)
 );
 CREATE INDEX IF NOT EXISTS idx_record_ident_record ON record_ident(record_uid);

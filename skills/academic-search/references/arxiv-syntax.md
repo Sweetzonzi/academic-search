@@ -47,8 +47,9 @@
 | `--all-of x`（可重复） | `abs:"x"`，多个之间用 `AND` |
 | `--any-of a b` | `(abs:"a" OR abs:"b")` |
 | `--author A` | `au:"A"` |
-| `--venue V` | **arXiv 侧无法表达载体条件**：arXiv 没有 venue 概念。注意现状——带上 `--venue` 时本地过滤会把 arXiv 结果一并排除，结果通常为空 |
+| `--venue V` | **arXiv 侧无法表达载体条件**：arXiv 没有 venue 概念。给定白名单时这一腿**根本不参与**（在 `counts.by_source` 里记 0、不算失败），因为取回来也判不了 |
+| `--min-citations` / `--min-fwci` | 同上：arXiv 没有被引数据，给了任一条这一腿就不参与 |
 | `--since-years N` | `submittedDate:[(今天-N 年)0000 TO 今天2359]` |
-| `--limit N` | `max_results`（上限 2000） |
+| `--limit N` | **不影响这里**：一次取数固定 `max_results=100`，`--limit` 只截断展示 |
 
 > 关键词走的是 **`abs:`（摘要）**，不是 `all:`：只出现在标题里的词不会命中。结果偏少时先把词放宽，而不是怀疑接口坏了。

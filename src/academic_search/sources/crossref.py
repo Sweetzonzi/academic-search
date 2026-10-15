@@ -1,16 +1,28 @@
 """Crossref 客户端：初版只用于 lookup 兜 DOI（IFACE-SOURCE §3.3）。
 
-本机尚未实测，字段以官方 REST API 文档为准；M1 落地时用一次真实请求复核。
+字段形状已用真实请求复核（docs/实验/EX-2026-10-16-复核Crossref字段.md）。
 """
 
 from __future__ import annotations
 
+import re
 import urllib.parse
 
 from . import SourceError
+from .http import build_url
 from .. import contenthash
 
 BASE = "https://api.crossref.org/works"
+
+#: `mailto` 进查询串与 User-Agent，进 Crossref 的 polite pool
+#: （EX-2026-10-16-crossref-fields (c) 第 4 条）。
+USER_AGENT = "academic-search (mailto:%s)"
+
+#: JATS 的标题元素不是摘要内容。`<jats:title>Abstract</jats:title>` 剥掉标记之后
+#: 会把字面的 `Abstract` 留在正文前面（同 EX (c) 第 2 条），因此先整段删掉。
+_JATS_TITLE_RE = re.compile(
+    r"<(?:jats:)?title\b[^>]*>.*?</(?:jats:)?title>", re.IGNORECASE | re.DOTALL
+)
 
 TYPE_MAP = {
     "journal-article": "article",
@@ -49,6 +61,24 @@ def _first(value) -> str | None:
     return None
 
 
+def _clean(value) -> str | None:
+    """`title` / `container-title` 的落库形态：剥 JATS 标记 + 折叠空白（IFACE-SOURCE §3.3）。
+
+    保留大小写——它们是展示用的书名/标题，不是 `content_hash` 的原像
+    （`title_key` 由 `identity.title_key()` 从这份文本另算）。
+    """
+    text = contenthash.normalize_display_text(_first(value) or "")
+    return text or None
+
+
+def _clean_abstract(value) -> str | None:
+    """摘要：删掉 JATS 标题元素 → 剥标记 → 折叠空白。"""
+    if not value:
+        return None
+    text = contenthash.normalize_display_text(_JATS_TITLE_RE.sub(" ", str(value)))
+    return text or None
+
+
 def parse_work(message: dict, doi: str) -> dict:
     authors: list[str] = []
     for author in message.get("author") or []:
@@ -57,22 +87,19 @@ def parse_work(message: dict, doi: str) -> dict:
             name = (author.get("name") or "").strip()
         if name:
             authors.append(name)
-    abstract = message.get("abstract")
-    if abstract:
-        abstract = contenthash.strip_markup(abstract).strip() or None
     updated = (message.get("deposited") or {}).get("date-time") or (
         message.get("indexed") or {}
     ).get("date-time")
     return {
         "source": "crossref",
         "source_id": doi.lower(),
-        "title": _first(message.get("title")),
-        "abstract": abstract,
+        "title": _clean(message.get("title")),
+        "abstract": _clean_abstract(message.get("abstract")),
         "authors": authors,
         "published_at": _date_from_parts((message.get("issued") or {}).get("date-parts")),
         "updated_at": (updated or "")[:10] or None,
         "type": normalize_type(message.get("type")),
-        "venue": _first(message.get("container-title")),
+        "venue": _clean(message.get("container-title")),
         "language": message.get("language"),
         "idents": [("doi", doi.lower())],
     }
@@ -80,9 +107,10 @@ def parse_work(message: dict, doi: str) -> dict:
 
 def lookup(client, doi: str, *, mailto: str | None = None) -> dict | None:
     url = BASE + "/" + urllib.parse.quote(doi, safe="")
-    headers = {}
+    headers = {"Accept": "application/json"}
     if mailto:
-        headers["Accept"] = "application/json"
+        url = build_url(url, {"mailto": mailto})
+        headers["User-Agent"] = USER_AGENT % mailto
     try:
         response = client.get(url, headers=headers, source="crossref")
     except SourceError as exc:

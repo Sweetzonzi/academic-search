@@ -263,6 +263,17 @@ def test_lookup_sends_openalex_api_key(root, monkeypatch):
     assert any("api_key=TESTKEY" in url for url in client.urls), client.urls
 
 
+def test_lookup_mailto_comes_from_config(root, capsys, monkeypatch):
+    """`[contact] mailto` 从配置一路走到 Crossref 请求（IFACE-SOURCE §3.3）。"""
+    (root / "config" / "search.toml").write_text(
+        '[contact]\nmailto = "me@example.com"\n', encoding="utf-8"
+    )
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    assert cli.main(["--root", str(root), "lookup", "--doi", "10.1109/mcse.2011.37"]) == 0
+    assert any("mailto=me%40example.com" in url for url in client.urls), client.urls
+
+
 def test_verify_empty_bytes(root, capsys):
     code = cli.main(["--root", str(root), "verify", "--sample", "0"])
     assert code == 0
@@ -278,3 +289,170 @@ def test_resolve_root_env(monkeypatch, tmp_path):
     monkeypatch.setenv("ACADEMIC_SEARCH_ROOT", str(tmp_path))
     assert cli.resolve_root(None) == tmp_path
     assert cli.resolve_root(str(tmp_path / "x")) == (tmp_path / "x").resolve()
+
+
+# --------------------------------------------------------------------------
+# ADR-0062 / 0063：取数口径
+# --------------------------------------------------------------------------
+
+
+def _spec_hashes(root):
+    conn = store.connect(config.db_path(root))
+    try:
+        rows = conn.execute("SELECT spec_hash FROM run ORDER BY run_id").fetchall()
+    finally:
+        conn.close()
+    return [row["spec_hash"] for row in rows]
+
+
+def test_limit_is_display_only_same_spec_hash(root, monkeypatch):
+    """`--limit` 只截断展示：换个 limit 仍落在同一新鲜度窗口（ADR-0062 决策 3/5）。"""
+    monkeypatch.setattr(service, "make_client", lambda: FixtureClient())
+    first = service.run_search(root, SearchSpec(any_of=["attention"]), refresh="true",
+                               sources=["openalex"], limit=5)
+    assert first.network is True
+    second = service.run_search(root, SearchSpec(any_of=["attention"]), refresh="auto",
+                                sources=["openalex"], limit=20)
+    assert second.network is False
+    hashes = _spec_hashes(root)
+    assert len(hashes) == 2 and len(set(hashes)) == 1
+
+
+def test_sort_is_a_fetch_condition(root, monkeypatch):
+    """`--sort` 是取数条件：两个档是不同的切片，各抓一次（ADR-0062 决策 6）。"""
+    monkeypatch.setattr(service, "make_client", lambda: FixtureClient())
+    service.run_search(root, SearchSpec(any_of=["attention"]), refresh="true",
+                       sources=["openalex"], sort="date")
+    again = service.run_search(root, SearchSpec(any_of=["attention"]), refresh="auto",
+                               sources=["openalex"], sort="citations")
+    assert again.network is True
+    assert len(set(_spec_hashes(root))) == 2
+
+
+def test_source_is_a_fetch_condition(root, monkeypatch):
+    """`--source` 进 hash：`--source arxiv` 不该顶替默认两源的新鲜度（ADR-0062 代价 5）。"""
+    monkeypatch.setattr(service, "make_client", lambda: FixtureClient())
+    service.run_search(root, SearchSpec(any_of=["control"]), refresh="true", sources=["arxiv"])
+    other = service.run_search(root, SearchSpec(any_of=["control"]), refresh="auto",
+                               sources=["openalex"])
+    assert other.network is True
+
+
+def test_fetch_asks_for_one_full_page(root, monkeypatch):
+    """一次取数固定一页 100 条：计费按次，取少不省钱（ADR-0062 决策 5）。"""
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    service.run_search(root, SearchSpec(any_of=["attention"]), refresh="true",
+                       sources=["openalex"], limit=3)
+    openalex_urls = [url for url in client.urls if "api.openalex.org/works" in url]
+    assert openalex_urls
+    assert all("per_page=100" in url for url in openalex_urls)
+    assert all("sort=publication_date%3Adesc" in url for url in openalex_urls)
+
+
+def test_search_request_uses_the_new_door(root, monkeypatch):
+    """主题条件走 `search.title_and_abstract=`、结构化条件留在 `filter=`（ADR-0063）。"""
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    service.run_search(root, SearchSpec(all_of=["world model"], any_of=["drone", "UAV"]),
+                       refresh="true", sources=["openalex"])
+    url = [u for u in client.urls if "api.openalex.org/works" in u][0]
+    assert "search.title_and_abstract=%28%22world+model%22%29+AND+%28%22drone%22+OR+%22UAV%22%29" in url
+    assert "title_and_abstract.search" not in url
+
+
+# --------------------------------------------------------------------------
+# ADR-0060 / 0061：载体名单与引用阈值
+# --------------------------------------------------------------------------
+
+
+def _insert_arxiv_work(root, uid="u-arxiv", source_id="2401.7", text="World model for drones"):
+    conn = store.connect(config.db_path(root))
+    with store.write_tx(conn):
+        store.insert_record(conn, {
+            "record_uid": uid, "source": "arxiv", "source_id": source_id,
+            "title": text, "abstract": text,
+        })
+        store.upsert_ident(conn, "arxiv", source_id, uid)
+        store.create_work(conn, "wk-" + uid)
+        store.add_member(conn, uid, "wk-" + uid, "primary")
+    conn.close()
+    return "wk-" + uid
+
+
+def test_venue_whitelist_hits_arxiv_records_offline(root):
+    """`--venue arXiv` 在 `--refresh false` 下命中 > 0：arXiv 记录靠来源自身的载体。
+
+    PLAN §2 的 ADR-0060 验收判据之一；载体集合不是靠重抓回填的。
+    """
+    key = _insert_arxiv_work(root)
+    outcome = service.run_search(root, SearchSpec(any_of=["world model"], venues=["arXiv"]),
+                                 refresh="false", sources=["arxiv"])
+    assert [item["work_key"] for item in outcome.items] == [key]
+
+
+def test_venue_whitelist_fails_closed_on_unknown_carrier(root):
+    """载体集合为空的记录在带白名单的查询里判不出来——白名单不 fail-open。"""
+    _insert_arxiv_work(root)
+    outcome = service.run_search(root, SearchSpec(any_of=["world model"], venues=["ICRA"]),
+                                 refresh="false", sources=["arxiv"])
+    assert outcome.items == []
+
+
+def test_unregistered_venue_name_is_an_error(root, capsys):
+    code = cli.main(["--root", str(root), "search", "--any-of", "x", "--venue", "不存在的会",
+                     "--refresh", "false"])
+    assert code == 1
+    env = envelope_of(capsys)
+    assert env["error"]["code"] == "invalid_args"
+    assert "不存在的会" in env["error"]["message"]
+
+
+def test_venue_whitelist_skips_arxiv_leg(root, monkeypatch):
+    """给定白名单时 arXiv 腿不参与，如实记 0、不报错（ADR-0060 决策 5）。"""
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    outcome = service.run_search(root, SearchSpec(any_of=["attention"], venues=["ICRA"]),
+                                 refresh="true", sources=["openalex", "arxiv"])
+    assert outcome.counts["by_source"] == {"openalex": 3, "arxiv": 0}
+    assert outcome.counts["failures"] == []
+    assert not any("export.arxiv.org" in url for url in client.urls)
+
+
+def test_min_citations_filters_and_skips_arxiv_leg(root, monkeypatch):
+    """阈值远端下发 + 本地同判 + 跳过 arXiv 腿（ADR-0061 决策 2–4）。"""
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["attention"], min_citations=1000),
+        refresh="true", sources=["openalex", "arxiv"],
+    )
+    assert outcome.counts["by_source"]["arxiv"] == 0
+    assert outcome.counts["failures"] == []
+    assert outcome.items and all(item["cited_by_count"] >= 1000 for item in outcome.items)
+    url = [u for u in client.urls if "api.openalex.org/works" in u][0]
+    assert "cited_by_count%3A%3E1000" in url
+
+
+def test_min_fwci_excludes_null_values(root, monkeypatch):
+    """`fwci` 为空即不通过（ADR-0061 决策 3）；它是 work 级最大值。
+
+    fixture 三条里只有 NumPy 那条有 `fwci`（26.316），另两条是 `null`。
+    """
+    monkeypatch.setattr(service, "make_client", lambda: FixtureClient())
+    outcome = service.run_search(root, SearchSpec(min_fwci=2.0),
+                                 refresh="true", sources=["openalex"])
+    assert len(outcome.items) == 1
+    assert outcome.items[0]["fwci"] >= 2.0
+    assert outcome.items[0]["title"].startswith("The NumPy Array")
+
+
+def test_both_thresholds_are_anded(root, monkeypatch):
+    monkeypatch.setattr(service, "make_client", lambda: FixtureClient())
+    outcome = service.run_search(
+        root, SearchSpec(min_citations=1000, min_fwci=2.0),
+        refresh="true", sources=["openalex"],
+    )
+    assert len(outcome.items) == 1
+    item = outcome.items[0]
+    assert item["cited_by_count"] >= 1000 and item["fwci"] >= 2.0

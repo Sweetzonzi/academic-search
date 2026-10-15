@@ -68,18 +68,33 @@ def strip_markup(text: str) -> str:
     return _TAG_RE.sub(" ", text)
 
 
+def _normalize(text: str) -> str:
+    """五步里的前四步：剥标记 → NFKC → 连字符/引号统一 → 空白折叠。"""
+    out = strip_markup(text or "")
+    out = unicodedata.normalize("NFKC", out)
+    out = out.translate(_TRANSLATE)
+    for src, dst in _NBSP.items():
+        out = out.replace(src, dst)
+    return _WS_RE.sub(" ", out).strip()
+
+
+def normalize_display_text(text: str) -> str:
+    """剥标记 + 折叠空白，**不改大小写**——给要落库展示的字符串用。
+
+    契约：[IFACE-SOURCE §3.3](../../docs/接口/数据源适配.md)——Crossref 的
+    `title` / `container-title` 带 JATS 标记与填充空白，落库前两者都要处理，
+    但展示用的标题要保留原始大小写，所以不走 `normalize_source_text` 的第五步。
+    """
+    return _normalize(text)
+
+
 def normalize_source_text(text: str, kind: str) -> str:
     """把源文本规范化成 content_hash 的原像。
 
     kind 决定第 5 步是否小写；kind 未列入 CASE_INSENSITIVE_KINDS 时
     保留大小写（正文类）。
     """
-    out = strip_markup(text or "")
-    out = unicodedata.normalize("NFKC", out)
-    out = out.translate(_TRANSLATE)
-    for src, dst in _NBSP.items():
-        out = out.replace(src, dst)
-    out = _WS_RE.sub(" ", out).strip()
+    out = _normalize(text)
     if kind in CASE_INSENSITIVE_KINDS:
         out = out.lower()
     return out

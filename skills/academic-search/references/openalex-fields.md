@@ -37,13 +37,20 @@
 
 ## 4. 本 CLI 的参数怎么映射到 OpenAlex
 
+主题条件走 `search.title_and_abstract=`（一个布尔串），结构化条件走 `filter=`：
+
 | CLI 参数 | OpenAlex 请求 |
 |---|---|
-| `--all-of x`（可重复） | `title_and_abstract.search:x`，多个以逗号并列（交集） |
-| `--any-of a b` | `title_and_abstract.search:a\|b`（并集；OR 值 ≤ 100） |
-| `--venue V` | `primary_location.source.display_name.search:V` |
-| `--author A` | `raw_author_name.search:A` |
-| `--since-years N` | `from_publication_date=今天-N 年` + `to_publication_date=今天` |
-| `--sort date` / `--sort citations` | `publication_date:desc` / `cited_by_count:desc` |
+| `--all-of x`（可重复） | `search.title_and_abstract=("x1" AND "x2")`——每个值加双引号，值里的 `"` 被剥掉 |
+| `--any-of a b` | 同上，组内用 ` OR `；两组之间 ` AND `。如 `("world model") AND ("drone" OR "UAV")` |
+| `--venue V` | `filter=locations.source.id:<S-id>`——会名先由 `src/academic_search/venues.toml` 登记表解析；**解析不到即报错**，也可直写 `S…` |
+| `--author A` | `filter=raw_author_name.search:A` |
+| `--since-years N` | `filter=from_publication_date:<今天-N 年>` + `to_publication_date:<今天>` |
+| `--min-citations N` / `--min-fwci X` | `filter=cited_by_count:>N` / `fwci:>X`（叠加不额外计费；两个同时给出取与） |
+| `--sort date` / `--sort citations` | `sort=publication_date:desc` / `cited_by_count:desc`，**总是显式下发** |
+
+- **一次取数固定一页 100 条**（`per_page=100`），`--limit` 只截断展示——计费按次不按条，取少不省钱。
+- **排序与来源都是取数条件**，和 `--venue` / 两个阈值一起进 `spec_hash`；`--limit` / `--abstract` / `--in` 不进。
+- **给 `--venue` 白名单或任一引用阈值时，arXiv 那一腿不参与**（arXiv 没有载体概念、没有被引数据），它在 `counts.by_source` 里如实记 0，不算失败。
 
 > `--since-years` 在 OpenAlex 上走的是 `publication_date`，也就是**正式版日期**。要找真正的新预印本，用 `--source arxiv`（或补跑一次），不要只看 OpenAlex 的日期窗。

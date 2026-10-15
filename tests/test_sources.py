@@ -65,21 +65,61 @@ def test_openalex_parse_work_real_fixture(openalex_payload):
 
 def test_openalex_search_uses_fixture(openalex_payload):
     client = FakeClient({"api.openalex.org/works": json.dumps(openalex_payload)})
-    records = openalex.search(client, SearchSpec(any_of=["world model"]), limit=3)
+    records = openalex.search(client, SearchSpec(any_of=["world model"]))
     assert len(records) == 3
     assert client.requests == 1
 
 
-def test_openalex_build_filter_and_or():
-    spec = SearchSpec(all_of=["a", "b"], any_of=["c", "d"], venues=["ICRA"], authors=["Doe"])
-    value = openalex.build_filter(spec, from_date="2024-01-01", to_date=None)
-    assert value == (
-        "title_and_abstract.search:a,title_and_abstract.search:b,"
-        "title_and_abstract.search:c|d,"
-        "primary_location.source.display_name.search:ICRA,"
-        "raw_author_name.search:Doe,"
-        "from_publication_date:2024-01-01"
+def test_openalex_search_query_is_one_boolean_string():
+    """主题条件收成一个带引号的布尔串（ADR-0063 决策 1–4）。"""
+    spec = SearchSpec(all_of=["a", "b c"], any_of=["d", 'e"f'])
+    assert openalex.build_search_query(spec) == '("a" AND "b c") AND ("d" OR "ef")'
+    assert openalex.build_search_query(SearchSpec()) == ""
+
+
+def test_openalex_build_filter_is_structured_only():
+    spec = SearchSpec(all_of=["a"], venues=["ICRA"], authors=["Doe"],
+                      min_citations=100, min_fwci=2.5)
+    value = openalex.build_filter(
+        spec, from_date="2024-01-01", to_date=None, venue_ids=["S4210217939"]
     )
+    assert value == (
+        "locations.source.id:S4210217939,"
+        "raw_author_name.search:Doe,"
+        "from_publication_date:2024-01-01,"
+        "cited_by_count:>100,"
+        "fwci:>2.5"
+    )
+
+
+def test_openalex_build_filter_refuses_unresolved_venue():
+    """给了 venues 却没给解析结果时直接报错：静默丢过滤条件比报错危险（ADR-0060）。"""
+    with pytest.raises(SourceError):
+        openalex.build_filter(SearchSpec(venues=["ICRA"]), from_date=None, to_date=None)
+
+
+def test_openalex_url_fixes_page_size_and_always_sorts():
+    """一次取数固定一页 100 条、排序始终显式下发（ADR-0062 决策 5/6、ADR-0063 决策 6）。"""
+    url = openalex.search_url(SearchSpec(all_of=["a"]), api_key=None, sort="citations")
+    assert "per_page=100" in url
+    assert "sort=cited_by_count%3Adesc" in url
+    assert "search.title_and_abstract=%28%22a%22%29" in url
+    assert "publication_date%3Adesc" in openalex.search_url(
+        SearchSpec(all_of=["a"]), api_key=None
+    )
+
+
+def test_openalex_carrier_source_ids():
+    """载体集合取 `locations[].source.id` 的并集（ADR-0060 决策 1）。"""
+    locations = [
+        {"source": {"id": "https://openalex.org/S4210217939"}},
+        {"source": {"id": "https://openalex.org/S4306400194"}},
+        {"source": {"id": "https://openalex.org/S4210217939"}},
+        {"source": None},
+        {},
+    ]
+    assert openalex.carrier_source_ids(locations) == ["s4210217939", "s4306400194"]
+    assert openalex.carrier_source_ids(None) == []
 
 
 def test_openalex_bridges_from_arxiv_location():
@@ -113,7 +153,7 @@ def test_openalex_real_fixture_doi_is_bare(openalex_payload):
 
 def test_arxiv_search_parses_real_fixture():
     client = FakeClient({"export.arxiv.org/api/query": _text("arxiv_feed.xml")})
-    records = arxiv.search(client, SearchSpec(any_of=["control"]), limit=2)
+    records = arxiv.search(client, SearchSpec(any_of=["control"]))
     assert len(records) == 2
     first = records[0]
     assert first["source"] == "arxiv"
@@ -165,6 +205,63 @@ def test_crossref_404_returns_none():
             raise SourceError("crossref", "404 未找到", False)
 
     assert crossref.lookup(NotFound({}), "10.1/nope") is None
+
+
+def test_crossref_title_and_venue_lose_markup_and_padding():
+    """`title` / `container-title` 都剥 JATS 标记并折叠空白（IFACE-SOURCE §3.3）。"""
+    record = crossref.parse_work(
+        {
+            "title": ["<scp>GenAI</scp>\n        Multi‐agent Systems"],
+            "container-title": ["Generative           AI           for Vehicles"],
+            "type": "other",
+        },
+        "10.1002/9781394426713.ch11",
+    )
+    assert record["title"] == "GenAI Multi-agent Systems"
+    assert record["venue"] == "Generative AI for Vehicles"
+
+
+def test_crossref_abstract_drops_jats_heading():
+    """`jats:title` 是标题元素、不是摘要内容，不能留下字面的 `Abstract`（同 §3.3）。"""
+    record = crossref.parse_work(
+        {
+            "title": ["T"],
+            "abstract": "<jats:title>Abstract</jats:title>\n<jats:p>\n  Array programming…",
+        },
+        "10.1038/s41586-020-2649-2",
+    )
+    assert record["abstract"] == "Array programming..."
+
+
+def test_crossref_lookup_puts_mailto_in_request():
+    """`mailto` 要真的进请求（查询串或 User-Agent），否则进不了 polite pool。"""
+    seen: dict = {}
+
+    class Recorder(FakeClient):
+        def get(self, url, headers=None, source=""):
+            seen["url"] = url
+            seen["headers"] = headers or {}
+            return super().get(url, headers=headers, source=source)
+
+    client = Recorder({"api.crossref.org/works/": _text("crossref_work.json")})
+    crossref.lookup(client, "10.1109/mcse.2011.37", mailto="me@example.com")
+    assert "mailto=me%40example.com" in seen["url"]
+    assert "mailto:me@example.com" in seen["headers"].get("User-Agent", "")
+
+
+def test_crossref_lookup_without_mailto_keeps_plain_request():
+    seen: dict = {}
+
+    class Recorder(FakeClient):
+        def get(self, url, headers=None, source=""):
+            seen["url"] = url
+            seen["headers"] = headers or {}
+            return super().get(url, headers=headers, source=source)
+
+    client = Recorder({"api.crossref.org/works/": _text("crossref_work.json")})
+    crossref.lookup(client, "10.1109/mcse.2011.37")
+    assert "mailto" not in seen["url"]
+    assert "User-Agent" not in seen["headers"]
 
 
 def test_type_maps_cover_contract():

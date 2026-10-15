@@ -12,15 +12,17 @@
 |---|---|---|
 | `--all-of 词` | — | 可重复；组内 **AND**（交集） |
 | `--any-of 词` | — | 可重复；组内 **OR**（并集） |
-| `--venue 名` | — | 可重复。**带上它通常会让结果为空**：OpenAlex 那一腿的过滤器名实测 400（部分失败不改变 `ok`），arXiv 那一腿的记录没有 venue、会被本地过滤排除。在 venue 判据落地前，不要用这个参数筛载体 |
+| `--venue 名` | — | 可重复。写**会名**（`ICRA` / `IROS` / `RA-L` / `NeurIPS` / `ICML` / `ICLR` / `arXiv` 已登记），名字由 `src/academic_search/venues.toml` 解析成 OpenAlex source id；**解析不到就报错**（`invalid_args`），也可直写 `S…`。判据是「作品的载体 source id 集合 ∩ 名单 ≠ ∅」，**`venue` 字符串不参与判定**。给了白名单时 **arXiv 那一腿不参与**（arXiv 没有载体概念），它在 `counts.by_source` 里记 0 |
 | `--author 名` | — | 可重复 |
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
-| `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表 |
-| `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤 |
+| `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，所以 `--limit 5` 之后池子里仍会多出 95 条 |
+| `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤。**它进 `spec_hash`**，所以 `--source arxiv` 不会顶替默认两源的新鲜度 |
 | `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §4 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
 | `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`；当前没有投影，效果等于 `meta` |
-| `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后 |
+| `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档各抓一次、都进同一个池，因此换档会联网、也会得到不同的 `spec_hash` |
+| `--min-citations N` | 关闭 | 原始被引下限：远端下发 `filter=cited_by_count:>N`，本地按同一条件再判一次，**`cited_by_count` 为空即不通过**；给了它就**跳过 arXiv 腿**（那边没有被引数据） |
+| `--min-fwci X` | 关闭 | 领域归一化被引下限，同上（`filter=fwci:>X`）；与 `--min-citations` 同时给出时**取与** |
 | `--abstract` | 关闭（布尔开关） | 打开时每条附上摘要，截断到 `config/search.toml` 的 `abstract.chars`（默认 800）个字符。**不进 `spec_hash`**，所以不影响「同一检索式命中同一本 run 账本」。`lookup` 不受它约束——`lookup` 固定带完整摘要 |
 
 **用法清单（每条都实测过）：**
@@ -38,11 +40,17 @@ scripts/run.cmd search --any-of drone --limit 10 --refresh auto
 # d) 强制联网取新（OpenAlex 匿名档会 429，稳的是 --source arxiv）
 scripts/run.cmd search --all-of "world model" --any-of drone --source arxiv --limit 10 --refresh true
 
-# e) 排序（引用数降序）
+# e) 排序（引用数降序）——这是**另一次取数**：换档会联网，比 `--sort date` 多回一批「被引最高的切片」
 scripts/run.cmd search --any-of "multi-agent" --sort citations --limit 20 --refresh false
 
 # f) 清单带上摘要片段，便于判断相关性（截断长度由 config/search.toml 的 abstract.chars 控制）
 scripts/run.cmd search --all-of "world model" --any-of drone --abstract --limit 10 --refresh false
+
+# g) 找经典：远端按被引过滤 + 本地同判，arXiv 腿自动跳过（实测 8 条全部 ≥ 100）
+scripts/run.cmd search --any-of "world model" --min-citations 100 --refresh true --limit 8
+
+# h) 按载体筛：远端走 source id、本地走载体集合（实测 ICRA 一次取回 100 条）
+scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limit 5
 ```
 
 **坑（实测）：**
@@ -99,7 +107,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 | `true` | 强制联网 |
 | `false` | **绝不联网**，只读本地库 |
 
-判据是**检索式**（`spec_hash`），不是全局时间：换个关键词就是另一次检索。只有 `refreshed=1` 且 `status=ok` 的 run 才算「新鲜」，所以离线查询不会把 `auto` 锁死。
+判据是**检索式**（`spec_hash`），不是全局时间：换个关键词就是另一次检索。**`spec_hash` 只覆盖会改变远端请求的那些声明式参数**——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--abstract` / `--in` 不进（所以换个 `--limit` 仍命中同一本账本）。只有 `refreshed=1` 且 `status=ok` 的 run 才算「新鲜」，所以离线查询不会把 `auto` 锁死。
 
 ---
 
@@ -122,6 +130,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 | `type` | 规范值：`article` / `preprint` / `chapter` / `thesis` / `paratext` / `other` |
 | `doi` / `arxiv_id` / `openalex_id` | 可空 |
 | `cited_by_count` | 只有 OpenAlex 记录有值，arXiv-only 的条目为 `null` |
+| `fwci` | 同上取最大；`--min-fwci` 的判定依据（同义的 `citation_normalized_percentile` 不进载荷） |
 | `sources[]` | 每条记录一行：`{source, source_id, first_seen, role}`，用于「这篇来自哪几条记录」 |
 | `is_retracted` | 撤稿，不要推荐 |
 | `dup_suspect` | 疑似同一篇但**未合并**，引用时必须说明 |
@@ -148,7 +157,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 | `name` | ✅ | 查询名，**本文件内唯一**；也是 `sync --query` 的名字 |
 | `any_of` | 与 `all_of` 至少给一组 | 关键词并集，同义词放这里 |
 | `all_of` | 同上 | 关键词交集；与 `any_of` 同时生效 |
-| `venues` | 可选 | venue 白名单 |
+| `venues` | 可选 | 载体白名单，写会名（`ICRA` / `IROS` / `RA-L` / `NeurIPS` / `ICML` / `ICLR` / `arXiv` 已登记）。名字由 `src/academic_search/venues.toml` 解析，**解析不到会让该查询报错**；`AAMAS` 目前登记不上（OpenAlex 没有这个会议实体），见 `docs/06-待决事项.md` 的 `Q29` |
 | `authors` | 可选 | 作者白名单 |
 | `since_years` | 可选 | 回看窗口，默认 3 年 |
 | `expires` | 可选 | 到期日期；只有临时专题才写 |

@@ -16,9 +16,19 @@ from typing import Iterator, Mapping, Sequence
 from . import envelope
 
 #: sidecar 整库版本，与对外的 envelope.SCHEMA_VERSION 是两件事。
-SCHEMA_VERSION = 1
+#: 2：`record.venue_source_ids`（ADR-0060）、`record_ident.kind`（ADR-0064）。
+SCHEMA_VERSION = 2
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
+#: 逐版迁移。**只加列**（IFACE-DATA §6：不改唯一键、不改 record_uid 的派生规则）。
+#: 新库由 schema.sql 一次建全，因此每条都先查 `PRAGMA table_info` 再决定加不加。
+_MIGRATIONS: dict[int, tuple[tuple[str, str, str], ...]] = {
+    2: (
+        ("record", "venue_source_ids", "venue_source_ids TEXT"),
+        ("record_ident", "kind", "kind TEXT NOT NULL DEFAULT 'ident'"),
+    ),
+}
 
 
 def utcnow() -> str:
@@ -44,16 +54,28 @@ def connect(db_path: str | Path, *, create: bool = True) -> sqlite3.Connection:
     return conn
 
 
+def _add_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(" + table + ")")}
+    if column not in existing:
+        conn.execute("ALTER TABLE " + table + " ADD COLUMN " + ddl)
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """建表；版本号由 PRAGMA user_version 承载。"""
+    """建表 + 逐版迁移；版本号由 PRAGMA user_version 承载。"""
     conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
     current = conn.execute("PRAGMA user_version").fetchone()[0]
-    if current not in (0, SCHEMA_VERSION):
+    if current > SCHEMA_VERSION:
         raise envelope.EnvelopeError(
             envelope.IO_ERROR,
-            "sidecar schema_version=" + str(current) + "，本实现只支持 " + str(SCHEMA_VERSION),
+            "sidecar schema_version=" + str(current) + "，本实现只支持到 " + str(SCHEMA_VERSION),
         )
-    if current == 0:
+    for version in sorted(_MIGRATIONS):
+        if current >= version:
+            continue
+        for table, column, ddl in _MIGRATIONS[version]:
+            _add_column(conn, table, column, ddl)
+        current = version
+    if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
         conn.execute("PRAGMA user_version = " + str(SCHEMA_VERSION))
 
 
@@ -154,7 +176,7 @@ def get_run(conn: sqlite3.Connection, run_id: int) -> sqlite3.Row | None:
 
 #: record 里由来源提供的书目与信号列；刷新时逐列覆盖（取到的才写）。
 #: 存 JSON 文本的书目/信号列。
-_JSON_COLUMNS = frozenset({"authors", "counts_by_year"})
+_JSON_COLUMNS = frozenset({"authors", "counts_by_year", "venue_source_ids"})
 
 RECORD_FIELDS = (
     "title",
@@ -164,6 +186,7 @@ RECORD_FIELDS = (
     "updated_at",
     "type",
     "venue",
+    "venue_source_ids",
     "language",
     "title_key",
     "first_author_surname",
@@ -201,11 +224,20 @@ def insert_record(conn: sqlite3.Connection, row: Mapping) -> None:
 
 
 def update_record(conn: sqlite3.Connection, record_uid: str, fields: Mapping) -> None:
-    """刷新：只写非 None 的列，绝不用 NULL 覆盖已有值（IFACE-SOURCE §7）。"""
+    """刷新：只写非 None 的列，绝不用 NULL 覆盖已有值（IFACE-SOURCE §7）。
+
+    空的 JSON 列（`authors: []` / `venue_source_ids: []`）同样视为「这次取不到」，
+    不覆盖——载体集合被一次缺 `locations[]` 的响应清空，会让已有记录在带名单的
+    查询里判不出来（ADR-0060 代价 1）。
+    """
     updates = {k: v for k, v in fields.items() if v is not None and k in RECORD_FIELDS}
     for key in list(updates):
-        if key in _JSON_COLUMNS and not isinstance(updates[key], str):
-            updates[key] = json.dumps(updates[key], ensure_ascii=False)
+        if key in _JSON_COLUMNS:
+            if not updates[key]:
+                del updates[key]
+                continue
+            if not isinstance(updates[key], str):
+                updates[key] = json.dumps(updates[key], ensure_ascii=False)
     if updates:
         assignments = ", ".join(k + " = ?" for k in updates)
         conn.execute(
@@ -257,13 +289,40 @@ def record_uids_by_ident(conn: sqlite3.Connection, ns: str, value: str) -> list[
     return [r["record_uid"] for r in rows]
 
 
-def upsert_ident(conn: sqlite3.Connection, ns: str, value: str, record_uid: str) -> bool:
-    """登记别名；(ns,value) 已被别人持有则不动并返回 False。"""
+def ident_row(conn: sqlite3.Connection, ns: str, value: str) -> sqlite3.Row | None:
+    """该别名的持有行（含 `record_uid` 与 `kind`）；没有则 None。"""
+    return conn.execute(
+        "SELECT ns, value, record_uid, kind FROM record_ident WHERE ns = ? AND value = ?",
+        (ns, value),
+    ).fetchone()
+
+
+def upsert_ident(
+    conn: sqlite3.Connection, ns: str, value: str, record_uid: str, *, kind: str = "ident"
+) -> bool:
+    """登记别名；(ns,value) 已被别人持有则不动并返回 False。
+
+    「先写者占位、后来者不动」此后只对 `ident` 成立：`bridge` 行可被真正的持有者
+    接管，接管由 `group.ingest()` 校验内容后调 `take_over_ident()` 完成（ADR-0064）。
+    """
     cur = conn.execute(
-        "INSERT OR IGNORE INTO record_ident (ns, value, record_uid) VALUES (?, ?, ?)",
-        (ns, value, record_uid),
+        "INSERT OR IGNORE INTO record_ident (ns, value, record_uid, kind) VALUES (?, ?, ?, ?)",
+        (ns, value, record_uid, kind),
     )
     return cur.rowcount > 0
+
+
+def take_over_ident(conn: sqlite3.Connection, ns: str, value: str, record_uid: str) -> None:
+    """把别名移交给 `record_uid` 并提升为 `ident`（ADR-0064 决策 3）。"""
+    conn.execute(
+        "UPDATE record_ident SET record_uid = ?, kind = 'ident' WHERE ns = ? AND value = ?",
+        (record_uid, ns, value),
+    )
+
+
+def mark_metadata_conflict(conn: sqlite3.Connection, record_uid: str) -> None:
+    """标 `metadata_conflict`（DESIGN §4.1：冲突不静默采用、不归组）。"""
+    conn.execute("UPDATE record SET metadata_conflict = 1 WHERE record_uid = ?", (record_uid,))
 
 
 def idents_of(conn: sqlite3.Connection, record_uid: str) -> list[sqlite3.Row]:
@@ -534,7 +593,7 @@ def aggregate_work(conn: sqlite3.Connection, work_key: str) -> dict | None:
     published = [m for m in members if m["role"] == "published"]
     display = published[0] if published else members[0]
 
-    def _max_int(col: str):
+    def _max_value(col: str):
         values = [m[col] for m in members if m[col] is not None]
         return max(values) if values else None
 
@@ -606,7 +665,8 @@ def aggregate_work(conn: sqlite3.Connection, work_key: str) -> dict | None:
         "oa_status": _non_null("oa_status"),
         "pdf_url": _non_null("pdf_url"),
         "is_retracted": any(bool(m["is_retracted"]) for m in members),
-        "cited_by_count": _max_int("cited_by_count"),
+        "cited_by_count": _max_value("cited_by_count"),
+        "fwci": _max_value("fwci"),
         "sources": sources,
         "first_seen": min(seen_dates) if seen_dates else None,
         "last_seen": max(last_dates) if last_dates else None,
