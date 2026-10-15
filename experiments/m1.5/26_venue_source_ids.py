@@ -8,6 +8,8 @@ r"""会名 → OpenAlex source id 的确认（ADR-0060 决策 2 的登记表来�
      list  <全称片段>...   按片段列 `/sources` 候选（每次 10 credits / $0.001）
      show  <S-id>...       单实体 GET，打印完整 counts_by_year（**免费**）
      count <S-id> <年>     数该载体某一年的作品数（结构化 filter，1 credit / $0.0001）
+     work  <DOI 或 W-id>…  反查一篇论文挂在哪些载体上（单实体 GET，**免费**）——
+                           当 `/sources` 搜索按会名找不到时，这是最后一条线索
 
 用法（PowerShell，key 只在 User 作用域）：
 
@@ -15,6 +17,7 @@ r"""会名 → OpenAlex source id 的确认（ADR-0060 决策 2 的登记表来�
      & 'D:\anaconda3\python.exe' experiments\m1.5\26_venue_source_ids.py list "intelligent robots and systems"
      & 'D:\anaconda3\python.exe' experiments\m1.5\26_venue_source_ids.py show S4363608614
      & 'D:\anaconda3\python.exe' experiments\m1.5\26_venue_source_ids.py count S4363608614 2024
+     & 'D:\anaconda3\python.exe' experiments\m1.5\26_venue_source_ids.py work doi:10.48550/arXiv.1706.05296
 
 输出支撑：`venues.toml` 的 `ids` 与 `note`；数字同时记进
      docs/实验/EX-2026-10-16-检索口径与来源校验.md §16。
@@ -109,6 +112,37 @@ def cmd_count(pairs: list[str], key: str | None) -> int:
     return 0
 
 
+def cmd_work(refs: list[str], key: str | None) -> int:
+    for ref in refs:
+        print("=" * 78)
+        try:
+            item = _get(
+                "/works/" + urllib.parse.quote(ref, safe=""),
+                {"select": "id,display_name,publication_year,type,primary_location,locations"},
+                key,
+            )
+        except urllib.error.HTTPError as exc:
+            print(ref, "HTTP", exc.code, exc.reason)
+            continue
+        print("%s  %s  %s" % (
+            _short(item.get("id")), item.get("publication_year"), item.get("display_name"),
+        ))
+        print("  primary: " + _location(item.get("primary_location")))
+        for location in item.get("locations") or []:
+            print("  location: " + _location(location))
+
+    return 0
+
+
+def _location(location: dict | None) -> str:
+    if not location:
+        return "—"
+    source = location.get("source") or {}
+    return "%s  %s  version=%s" % (
+        _short(source.get("id")), source.get("display_name"), location.get("version"),
+    )
+
+
 def main(argv: list[str]) -> int:
     key = os.environ.get("OPENALEX_API_KEY") or None
     if not key:
@@ -124,6 +158,8 @@ def main(argv: list[str]) -> int:
         return cmd_show(rest, key)
     if mode == "count":
         return cmd_count(rest, key)
+    if mode == "work":
+        return cmd_work(rest, key)
     print("未知子命令：" + mode, file=sys.stderr)
     return 2
 
