@@ -64,7 +64,7 @@ agent_created: true
 ## 5. 读信封与退出码
 
 - `data.items[]`：结果条目。**答用户时至少给 `title` + `published_at` +（`doi` 或 `arxiv_id`）+ `sources[]`。**
-- `data.items[].abstract`：**按需出现**——`lookup` 固定带完整摘要；`search` 只有开了 `--abstract` 才带截断版（长度走 `config/search.toml`）。要引用摘要原文或照它翻译前，先读 `references/cli-reference.md` §1 与 §6：**它可能来自预印本稿，或者是 OpenAlex 倒排索引的还原产物**，载荷不带标记。
+- `data.items[].abstract`：**按需出现**——`lookup` 固定带完整摘要；`search` 只有开了 `--abstract` 才带截断版（长度走 `config/search.toml`）。要引用摘要原文或照它翻译前，先读 `references/cli-reference.md` §1 与 §6：**它可能来自预印本稿，或者是 OpenAlex 倒排索引的还原产物**，载荷不带标记。**当前 `--abstract` 与 `lookup` 的完整摘要都还没实现**，见 §7。
 - `data.network`：本次有没有发过请求；`data.cost`：`{usd, basis, requests}`（`basis` 是计费口径）。
 - `data.counts.failures[]`：部分源失败。**部分失败不算失败**：`ok` 仍为 true、退出码 0，如实汇报哪个源没成。
 - `data.degraded.reason`：本次降级了（余额不足只查本地，或新鲜度跳过联网）。**降级不是错误，不要重试。**
@@ -86,6 +86,7 @@ agent_created: true
 - **OpenAlex 匿名档不可用**：无 key 的每日额度按出口 IP 共享且随时耗尽，实测 429。今天唯一稳的路径是 `--source arxiv`；要用 OpenAlex 先配 `OPENALEX_API_KEY`。
 - 结果里每条 `sources[].source` 会告诉你它来自哪个源、扮演什么角色（`preprint` / `primary` / `published`）。
 - 未接线：`sync` / `textify` / `read` / `digest list|put` / `export` / `bundle`；`promote`、`graph` 按契约顺延到 M4 / M5。
+- **参数级未实现**：`search --abstract` 与 `lookup` 的完整摘要（ADR-0058，见仓库 `docs/决策/ADR-0058.md`）——传 `--abstract` 会被 argparse 拒绝（退出码 2、无信封），`lookup` 的条目里也还没有 `abstract` 键。
 
 ## 8. references（按需读，不要默认加载）
 
