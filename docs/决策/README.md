@@ -82,4 +82,5 @@ title: "设计决策索引"
 | [ADR-0054](ADR-0054.md) | 派生文本的通道与键 | `digest put` 改批量 JSON；kind 含粒度；新增译名表 `config/terms.toml` 并把 `glossary_version` 更名 `terms_version`；content_hash 细则写死 | accepted |
 | [ADR-0055](ADR-0055.md) | 运行留档与运行环境 | 留档合并为 `data/runs/<run_id>/`；宿主只装薄 bundle；`vendor/` 装 pandoc；回看 30 天；锁冲突即 `busy`；库内 UTC、报告本地时区 | accepted |
 | [ADR-0056](ADR-0056.md) | 契约补口 | `sync` 的 `data` 是 `run.json` 真子集；三个检索命令都落候选池、`query_name` 匿名即 NULL；主 `.tex` 按 `\documentclass` 判定、PDF 图 `pdftocairo`→PyMuPDF 降级且渲染器进 `converter_version`；`digest put` 不收回传 hash；部分失败不改变退出码 | accepted |
+| [ADR-0057](ADR-0057.md) | 检索载荷的粒度 | `search` / `lookup` 条目只保证可溯源最小集，摘要与正文不进载荷；不做分页/计数，全库规模由 `--limit` 兜住 | accepted |
 
