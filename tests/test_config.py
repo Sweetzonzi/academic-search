@@ -87,8 +87,15 @@ def test_load_search_defaults(tmp_path):
     cfg = config.load_search(tmp_path)
     assert cfg.max_age_hours == 24
     assert cfg.lookback_days == 30
+    assert cfg.abstract_chars == 800
     assert cfg.min_grade == "B"
     assert cfg.venue_blacklist == []
+
+
+def test_abstract_chars_falls_back_without_config(tmp_path):
+    # config/ 不进版本库：缺键时必须回到代码里的缺省值（ADR-0058 决策 3）。
+    assert config.DEFAULT_ABSTRACT_CHARS == 800
+    assert config.load_search(tmp_path).abstract_chars == config.DEFAULT_ABSTRACT_CHARS
 
 
 def test_load_search_overrides(tmp_path):
@@ -96,13 +103,15 @@ def test_load_search_overrides(tmp_path):
         tmp_path,
         config.SEARCH,
         "[refresh]\nmax_age_hours = 6\n[sync]\nlookback_days = 7\n"
-        "[quality]\nmin_grade = \"A\"\nvenue_blacklist = [\"Predatory Press\"]\n",
+        "[quality]\nmin_grade = \"A\"\nvenue_blacklist = [\"Predatory Press\"]\n"
+        "[abstract]\nchars = 100\n",
     )
     cfg = config.load_search(tmp_path)
     assert cfg.max_age_hours == 6
     assert cfg.lookback_days == 7
     assert cfg.min_grade == "A"
     assert cfg.venue_blacklist == ["Predatory Press"]
+    assert cfg.abstract_chars == 100
 
 
 def test_load_sources_defaults_and_override(tmp_path):

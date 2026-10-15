@@ -35,6 +35,7 @@ DEFAULT_SOURCE_ENABLED = {
 
 DEFAULT_MAX_AGE_HOURS = 24
 DEFAULT_LOOKBACK_DAYS = 30
+DEFAULT_ABSTRACT_CHARS = 800
 DEFAULT_MIN_GRADE = "B"
 DEFAULT_SINCE_YEARS = 3
 LANG_DEFAULT = "zh"
@@ -108,6 +109,7 @@ class Profile:
 class SearchConfig:
     max_age_hours: int = DEFAULT_MAX_AGE_HOURS
     lookback_days: int = DEFAULT_LOOKBACK_DAYS
+    abstract_chars: int = DEFAULT_ABSTRACT_CHARS
     min_grade: str = DEFAULT_MIN_GRADE
     venue_blacklist: list[str] = field(default_factory=list)
 
@@ -259,10 +261,13 @@ def load_search(root: str | Path) -> SearchConfig:
         refresh = raw.get("refresh") or {}
         sync = raw.get("sync") or {}
         quality = raw.get("quality") or {}
+        abstract = raw.get("abstract") or {}
         if isinstance(refresh, dict) and "max_age_hours" in refresh:
             cfg.max_age_hours = int(refresh["max_age_hours"])
         if isinstance(sync, dict) and "lookback_days" in sync:
             cfg.lookback_days = int(sync["lookback_days"])
+        if isinstance(abstract, dict) and "chars" in abstract:
+            cfg.abstract_chars = int(abstract["chars"])
         if isinstance(quality, dict):
             if "min_grade" in quality:
                 cfg.min_grade = str(quality["min_grade"])

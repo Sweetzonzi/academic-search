@@ -42,6 +42,10 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--max-age", type=float, default=None, dest="max_age")
     search.add_argument("--in", choices=["meta", "body", "both"], default="meta", dest="in_scope")
     search.add_argument("--sort", choices=["citations", "date"], default="date")
+    search.add_argument(
+        "--abstract", action="store_true",
+        help="条目附上摘要，截断到 search.toml 的 abstract.chars（默认 800）",
+    )
 
     lookup = sub.add_parser("lookup", help="按 DOI / arXiv ID / 标题取条目或候选")
     lookup.add_argument("--doi")
@@ -81,6 +85,7 @@ def _dispatch(args, name: str):
             root, spec, limit=args.limit, sources=sources, refresh=args.refresh,
             max_age_hours=int(args.max_age) if args.max_age else cfg.max_age_hours,
             sort=args.sort, in_scope=args.in_scope, blacklist=cfg.venue_blacklist,
+            abstract=args.abstract, abstract_chars=cfg.abstract_chars,
         )
         return outcome.payload(), 0
 

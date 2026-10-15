@@ -83,5 +83,6 @@ title: "设计决策索引"
 | [ADR-0055](ADR-0055.md) | 运行留档与运行环境 | 留档合并为 `data/runs/<run_id>/`；宿主只装薄 bundle；`vendor/` 装 pandoc；回看 30 天；锁冲突即 `busy`；库内 UTC、报告本地时区 | accepted |
 | [ADR-0056](ADR-0056.md) | 契约补口 | `sync` 的 `data` 是 `run.json` 真子集；三个检索命令都落候选池、`query_name` 匿名即 NULL；主 `.tex` 按 `\documentclass` 判定、PDF 图 `pdftocairo`→PyMuPDF 降级且渲染器进 `converter_version`；`digest put` 不收回传 hash；部分失败不改变退出码 | accepted |
 | [ADR-0057](ADR-0057.md) | 检索载荷的粒度 | `search` / `lookup` 条目只保证可溯源最小集，摘要与正文不进载荷；不做分页/计数，全库规模由 `--limit` 兜住 | partially superseded by ADR-0058 |
-| [ADR-0058](ADR-0058.md) | 摘要按需带出 | `lookup` 固定带完整摘要；`search` 新增 `--abstract`（默认关闭）带截断版，长度由 `search.toml` 的 `abstract.chars` 控制；多来源摘要按「版本层级 → 文本保真度」两级取值 | accepted |
+| [ADR-0058](ADR-0058.md) | 摘要按需带出 | `lookup` 固定带完整摘要；`search` 新增 `--abstract`（默认关闭）带截断版，长度由 `search.toml` 的 `abstract.chars` 控制；多来源摘要按「版本层级 → 文本保真度」两级取值 | partially superseded by ADR-0059 |
+| [ADR-0059](ADR-0059.md) | 摘要截断默认值 | `search --abstract` 的 `[abstract] chars` 默认从 240 调到 800；契约措辞与 ADR-0058 其余决策不变 | accepted |
 

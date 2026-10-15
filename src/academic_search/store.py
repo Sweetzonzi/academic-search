@@ -477,6 +477,29 @@ def derived_get(conn: sqlite3.Connection, key: Sequence[str]) -> sqlite3.Row | N
 # work 级聚合（IFACE-SOURCE §5）
 # --------------------------------------------------------------------------
 
+#: 摘要取值的文本保真度排序（ADR-0058 决策 4）：数字小者优先。
+ABSTRACT_FIDELITY = {"arxiv": 0, "crossref": 1, "openalex": 2}
+
+
+def work_abstract(members: Sequence[sqlite3.Row]) -> str | None:
+    """按 ADR-0058 决策 4 的两级规则取摘要：版本层级 → 文本保真度。
+
+    第一级：非预印本记录（含 role=published）优先于预印本记录；
+    第二级：同层级内 arxiv 原生 > crossref 原生 > openalex 还原。
+    取第一个非空即停；都没有返回 None。
+    """
+
+    def rank(member: sqlite3.Row) -> tuple[int, int]:
+        preprint = member["role"] == "preprint" or member["type"] == "preprint"
+        return (1 if preprint else 0, ABSTRACT_FIDELITY.get(member["source"], 9))
+
+    for member in sorted(members, key=rank):
+        value = member["abstract"]
+        if value:
+            return value
+    return None
+
+
 def work_leader(conn: sqlite3.Connection, work_key: str) -> sqlite3.Row | None:
     return conn.execute(
         """
@@ -570,6 +593,7 @@ def aggregate_work(conn: sqlite3.Connection, work_key: str) -> dict | None:
     return {
         "work_key": work_key,
         "title": display["title"],
+        "abstract": work_abstract(members),
         "authors": json.loads(display["authors"]) if display["authors"] else [],
         "venue": _non_null("venue"),
         "language": _non_null("language"),

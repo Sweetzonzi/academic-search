@@ -21,7 +21,7 @@
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
 | `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`；当前没有投影，效果等于 `meta` |
 | `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后 |
-| `--abstract` | 关闭（布尔开关） | 打开时每条附上摘要，截断到 `config/search.toml` 的 `abstract.chars`（默认 240）个字符。**不进 `spec_hash`**，所以不影响「同一检索式命中同一本 run 账本」。`lookup` 不受它约束——`lookup` 固定带完整摘要。**尚未实现**：现在传它会得到 argparse 退出码 2、无信封（`lookup` 的完整摘要同样未落地） |
+| `--abstract` | 关闭（布尔开关） | 打开时每条附上摘要，截断到 `config/search.toml` 的 `abstract.chars`（默认 800）个字符。**不进 `spec_hash`**，所以不影响「同一检索式命中同一本 run 账本」。`lookup` 不受它约束——`lookup` 固定带完整摘要 |
 
 **用法清单（每条都实测过）：**
 

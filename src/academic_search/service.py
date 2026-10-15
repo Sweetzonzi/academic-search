@@ -216,6 +216,22 @@ def _sorted_items(conn, keys, *, spec: SearchSpec, blacklist, sort: str, limit: 
     return items[:limit]
 
 
+def _shape_abstracts(items: list[dict], *, include: bool, chars: int) -> list[dict]:
+    """按 ADR-0058 决策 2 处理条目里的 abstract：开关关时删键，开时截断。
+
+    chars 为 0 或负数 = 不截断（与 config/search.toml 的注释同一口径）。
+    摘要逐字符取前 chars 个，不加省略号——载荷里没有标记位承载它。
+    """
+    for item in items:
+        if not include:
+            item.pop("abstract", None)
+            continue
+        value = item.get("abstract")
+        if value is not None and chars > 0:
+            item["abstract"] = value[:chars]
+    return items
+
+
 def run_search(
     root,
     spec: SearchSpec,
@@ -228,6 +244,8 @@ def run_search(
     sort: str = "date",
     in_scope: str = "meta",
     blacklist: Iterable[str] = (),
+    abstract: bool = False,
+    abstract_chars: int = config.DEFAULT_ABSTRACT_CHARS,
     client=None,
     today=None,
 ) -> Outcome:
@@ -313,8 +331,11 @@ def run_search(
             conn, spec, sources=sources, from_date=from_date, to_date=to_date,
             in_scope=in_scope, root=root,
         )
-        outcome.items = _sorted_items(conn, keys, spec=spec, blacklist=blacklist,
-                                      sort=sort, limit=limit)
+        outcome.items = _shape_abstracts(
+            _sorted_items(conn, keys, spec=spec, blacklist=blacklist, sort=sort, limit=limit),
+            include=abstract,
+            chars=abstract_chars,
+        )
         return outcome
     finally:
         conn.close()

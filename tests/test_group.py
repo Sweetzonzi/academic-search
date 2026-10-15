@@ -148,5 +148,33 @@ def test_aggregate_retraction_is_or(conn):
     assert agg["is_retracted"] is True
 
 
+def test_aggregate_abstract_prefers_published_over_fidelity(conn):
+    """版本层级压过文本保真度：正式版 Crossref 盖过预印本 arXiv（ADR-0058 决策 4）。"""
+    pre = ingest(conn, rec(source="arxiv", source_id="2401.00006", type="preprint",
+                           abstract="ARXIV NATIVE", idents=[("doi", "10.1/z")]))
+    pub = ingest(conn, rec(source="crossref", source_id="10.1/z", type="article",
+                           abstract="PUBLISHED TEXT", idents=[("doi", "10.1/z")]))
+    assert pre.work_key == pub.work_key
+    agg = store.aggregate_work(conn, pre.work_key)
+    assert agg["abstract"] == "PUBLISHED TEXT"
+
+
+def test_aggregate_abstract_fidelity_within_tier(conn):
+    """同层级内按文本保真度：Crossref 原生盖过 OpenAlex 还原（ADR-0058 决策 4）。"""
+    a = ingest(conn, rec(source="openalex", source_id="W9", type="preprint",
+                         abstract="RESTORED", idents=[("doi", "10.1/w")]))
+    b = ingest(conn, rec(source="crossref", source_id="10.1/w", type="preprint",
+                         abstract="NATIVE", idents=[("doi", "10.1/w")]))
+    assert a.work_key == b.work_key
+    agg = store.aggregate_work(conn, a.work_key)
+    assert agg["abstract"] == "NATIVE"
+
+
+def test_aggregate_abstract_none_when_all_empty(conn):
+    a = ingest(conn, rec(source_id="W10", abstract=None))
+    agg = store.aggregate_work(conn, a.work_key)
+    assert agg["abstract"] is None
+
+
 def test_aggregate_missing_work_returns_none(conn):
     assert store.aggregate_work(conn, "nope") is None

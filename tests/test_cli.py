@@ -145,6 +145,47 @@ def test_local_fts_matches_inflections(root):
     assert [item["work_key"] for item in outcome.items] == ["wk-drone"]
 
 
+def _insert_abstract_work(root, abstract="abcdefghij"):
+    conn = store.connect(config.db_path(root))
+    with store.write_tx(conn):
+        store.insert_record(conn, {
+            "record_uid": "u-abs", "source": "arxiv", "source_id": "2401.9",
+            "title": "Abstract demo", "abstract": abstract,
+        })
+        store.upsert_ident(conn, "arxiv", "2401.9", "u-abs")
+        store.create_work(conn, "wk-abs")
+        store.add_member(conn, "u-abs", "wk-abs", "primary")
+    conn.close()
+
+
+def test_search_abstract_flag_shapes_payload(root):
+    _insert_abstract_work(root)
+    off = service.run_search(root, SearchSpec(), refresh="false", sources=["arxiv"])
+    assert "abstract" not in off.items[0]
+    on = service.run_search(root, SearchSpec(), refresh="false", sources=["arxiv"],
+                            abstract=True, abstract_chars=5)
+    assert on.items[0]["abstract"] == "abcde"
+    # chars <= 0 = 不截断（与 config/search.toml 的注释同一口径）
+    full = service.run_search(root, SearchSpec(), refresh="false", sources=["arxiv"],
+                              abstract=True, abstract_chars=0)
+    assert full.items[0]["abstract"] == "abcdefghij"
+
+
+def test_lookup_carries_full_abstract(root):
+    _insert_abstract_work(root)
+    outcome = service.run_lookup(root, arxiv_id="2401.9", refresh="false")
+    assert outcome.items[0]["abstract"] == "abcdefghij"
+
+
+def test_cli_search_abstract_uses_config_chars(root, capsys):
+    (root / "config" / "search.toml").write_text("[abstract]\nchars = 4\n", encoding="utf-8")
+    _insert_abstract_work(root)
+    assert cli.main(["--root", str(root), "search", "--refresh", "false", "--abstract"]) == 0
+    assert envelope_of(capsys)["data"]["items"][0]["abstract"] == "abcd"
+    assert cli.main(["--root", str(root), "search", "--refresh", "false"]) == 0
+    assert "abstract" not in envelope_of(capsys)["data"]["items"][0]
+
+
 def test_fts_query_skips_blank_terms():
     assert service._fts_query(SearchSpec(all_of=["", "   "])) == ""
     assert service._fts_query(SearchSpec(all_of=["world model"])) == '("world model" *)'
