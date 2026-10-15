@@ -59,6 +59,19 @@ SHOULD_PASS_PATHS = [
     '| `embeddings/ratelimit.py`（别的仓库） |',
 ]
 
+# B 段必须被抓到：裸编号引用（真悬空时 B 段据此报错）
+MUST_FLAG_IDS = [
+    "见 EX-2026-10-14-nonexistent，结论写在那里",
+    "（推翻 ADR-9999）",
+]
+
+# B 段不应被抓到：编号出现在路径或文件名里，那不是引用。
+# 第一条是真实撞过的误报：文件名里的 ASCII 段被当成裸编号。
+SHOULD_PASS_IDS = [
+    "见 docs/实验/EX-2026-10-16-crossref字段.md",
+    "| `docs/决策/ADR-0051.md` | 权威归属 |",
+]
+
 
 def hits(line: str) -> list[str]:
     out = []
@@ -71,6 +84,11 @@ def hits(line: str) -> list[str]:
 def path_hits(line: str) -> list[str]:
     """D 段：该行里被判定为「应当存在但不在仓库」的 .py 路径。"""
     return [p for p in dc.py_paths_in(line) if not (dc.ROOT / p.replace("\\", "/")).exists()]
+
+
+def bare_hits(line: str) -> list[str]:
+    """B 段：该行里被当作裸编号引用、要拿去查文档是否存在的字符串。"""
+    return [m.group(1) for m in dc.BARE.finditer(line)]
 
 
 def main() -> int:
@@ -100,6 +118,20 @@ def main() -> int:
     print("\nD 段特异度：存在或非仓库的 .py 不应被命中")
     for s in SHOULD_PASS_PATHS:
         got = path_hits(s)
+        if got:
+            noise += 1
+        print(f"  {'✗ 误报' if got else '✓'}  {s[:64]}" + (f"   ← {got}" if got else ""))
+
+    print("\nB 段灵敏度：裸编号引用必须被命中")
+    for s in MUST_FLAG_IDS:
+        got = bare_hits(s)
+        if not got:
+            miss += 1
+        print(f"  {'✓' if got else '✗ 漏检'}  {s[:64]}" + (f"   → {got}" if got else ""))
+
+    print("\nB 段特异度：路径或文件名里的编号不应被命中")
+    for s in SHOULD_PASS_IDS:
+        got = bare_hits(s)
         if got:
             noise += 1
         print(f"  {'✗ 误报' if got else '✓'}  {s[:64]}" + (f"   ← {got}" if got else ""))

@@ -50,7 +50,9 @@ C_KINDS = {"normative", "runbook"}
 
 FM = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
 REF = re.compile(r"(?<![A-Za-z0-9-])([A-Za-z][A-Za-z0-9._-]*)\s*§\s*(\d+(?:\.\d+)*)")
-BARE = re.compile(r"(?<![A-Za-z0-9-])(ADR-\d{4}|EX-\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+)(?![A-Za-z0-9-])")
+# lookbehind 排除 `/` 与 `\`：编号出现在路径或文件名里不是引用。
+# 反例：文件名 `EX-2026-10-16-crossref字段.md` 的 ASCII 段会被当成裸编号。
+BARE = re.compile(r"(?<![A-Za-z0-9/\\-])(ADR-\d{4}|EX-\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+)(?![A-Za-z0-9-])")
 
 # D 段：文档里点名的仓库内 .py 路径（行内代码、代码块、正文都算）
 PYREF = re.compile(r"(?<![\w./\\:-])((?:[\w.-]+[/\\])+[\w.-]+\.py)(?![\w])")
