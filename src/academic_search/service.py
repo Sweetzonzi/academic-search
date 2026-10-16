@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from . import config, envelope, group, htmlclean, paths, store, textify, venues
+from . import config, envelope, group, htmlclean, paths, report, store, textify, venues
 from .sources import SearchSpec, SourceError, normalize_doi as source_normalize_doi
 from .sources import arxiv as arxiv_source
 from .sources import crossref as crossref_source
@@ -285,6 +285,180 @@ def _shape_abstracts(items: list[dict], *, include: bool, chars: int) -> list[di
     return items
 
 
+# --------------------------------------------------------------------------
+# 采集：search 与 sync 共用的那一条流水线（ADR-0049 决策 3）
+# --------------------------------------------------------------------------
+
+def _quota_exhausted(client, threshold: float | None) -> bool:
+    """余额是否低于阈值。**从没读到过余额不算耗尽**（ADR-0066 决策 11）。
+
+    余额来自 OpenAlex 的 `x-ratelimit-remaining-usd` 响应头，第一次请求之前无从得知；
+    因此单次 `search` 通常不会在开头就触发，多查询的 `sync` 才会——那正是要保护的情形。
+    """
+    if threshold is None:
+        return False
+    remaining = getattr(client, "rate_remaining_usd", None)
+    return remaining is not None and float(remaining) < float(threshold)
+
+
+def _archive_responses(root, run_id: int, client, log_start: int, with_records) -> list[dict]:
+    """留档本 run 的响应原文，返回 `responses[]` 清单（ADR-0066 决策 10）。
+
+    留档判据：该响应产生了至少一条写入 `record` 的记录，或该请求失败。
+    `n` 按本 run 内的请求顺序从 1 起；`page` 初版恒为 1（一次取数固定一页 100 条，ADR-0062）。
+    """
+    log = list(getattr(client, "log", None) or [])[log_start:]
+    kept: list[dict] = []
+    for entry in log:
+        failed = entry.status == 0 or entry.status >= 400
+        if not failed and entry.source not in with_records:
+            continue
+        index = len(kept) + 1
+        report.write_response(root, run_id, index, entry.source, entry.payload())
+        kept.append({
+            "n": index,
+            "sha256": entry.sha256,
+            "source": entry.source,
+            "url": entry.url,
+            "page": 1,
+            "status": entry.status,
+        })
+    return kept
+
+
+def collect_run(
+    conn,
+    root,
+    spec: SearchSpec,
+    *,
+    spec_key: str,
+    query_name: str | None,
+    sources: Sequence[str],
+    refresh: str,
+    max_age_hours: int,
+    from_date: str | None,
+    to_date: str | None,
+    venue_ids: Sequence[str],
+    blocked_venues: Sequence[str],
+    skipped: set[str],
+    sort: str = "date",
+    client=None,
+    quota_min_usd: float | None = None,
+    archive: bool = False,
+) -> dict:
+    """跑一条检索式：判刷新 → 取数入池 → 收尾写一行账本。
+
+    `search` 与 `sync` 共用这一层，差别只在窗口怎么算、`query_name` 填什么、
+    要不要落 `data/runs/`（`archive=True`）。**这里不抛「全失败」**——那由调用方决定：
+    `search` 一次只有这一条，失败即整体失败；`sync` 的单条失败不该拖垮整次调用
+    （ADR-0066 决策 4）。
+
+    返回该 run 的原始值：`run_id` / `status` / `refreshed` / `counts` / `cost` /
+    `responses` / `degraded` / `skip_reason` / `all_failed`。
+    """
+    if not _should_refresh(conn, spec_key, refresh, max_age_hours):
+        do_refresh, skip_reason = False, ("freshness" if refresh == "auto" else None)
+        reason = "同一检索式在新鲜度窗口内，跳过联网（--refresh auto）" if skip_reason else None
+    elif _quota_exhausted(client, quota_min_usd):
+        do_refresh, skip_reason, reason = False, "quota", "余额不足，只查本地"
+    else:
+        do_refresh, skip_reason, reason = True, None, None
+
+    if not do_refresh:
+        with store.write_tx(conn):
+            run_id = store.start_run(
+                conn, spec_hash=spec_key, query_name=query_name, refreshed=False,
+                window_from=from_date, window_to=to_date,
+            )
+            store.finish_run(conn, run_id, status="ok", requests=0, cost_usd=0.0,
+                             cost_basis="跳过联网", counts={})
+        return {
+            "run_id": run_id, "status": "ok", "refreshed": False, "counts": {},
+            "cost": {"usd": 0.0, "basis": "跳过联网", "requests": 0}, "responses": [],
+            "degraded": reason, "skip_reason": skip_reason, "quota_stopped": False,
+            "all_failed": False,
+        }
+
+    client = client or make_client()
+    log_start = len(getattr(client, "log", None) or [])
+    requests_before, cost_before = client.requests, client.cost_usd
+    with store.write_tx(conn):
+        run_id = store.start_run(
+            conn, spec_hash=spec_key, query_name=query_name, refreshed=True,
+            window_from=from_date, window_to=to_date,
+        )
+    failures: list[dict] = []
+    by_source: dict[str, int] = {}
+    attempted: list[str] = []
+    with_records: set[str] = set()
+    new_candidates = 0
+    dedup_blocked = 0
+    wrote_anything = False
+    quota_hit = False
+    for source in sources:
+        if source in skipped:
+            by_source[source] = 0
+            continue
+        # 每个源返回后的检查点：余额不足就不再发后续请求（ADR-0066 决策 11）
+        if quota_hit or _quota_exhausted(client, quota_min_usd):
+            quota_hit = True
+            by_source[source] = 0
+            continue
+        attempted.append(source)
+        try:
+            records = _fetch(client, source, spec, sort=sort,
+                             from_date=from_date, to_date=to_date,
+                             venue_ids=venue_ids)
+        except SourceError as exc:
+            failures.append({"source": source, "reason": exc.reason})
+            by_source[source] = 0
+            continue
+        by_source[source] = len(records)
+        if records:
+            wrote_anything = True
+            with_records.add(source)
+        with store.write_tx(conn):
+            for record in records:
+                result = group.ingest(conn, record, run_id=run_id,
+                                      blocked_venues=blocked_venues)
+                if result.new_candidate:
+                    new_candidates += 1
+                if result.dedup_level:
+                    dedup_blocked += 1
+    counts = {
+        "new_candidates": new_candidates,
+        "dedup_blocked": dedup_blocked,
+        "by_source": by_source,
+        "failures": failures,
+    }
+    # 「全失败」只对**真的发过请求**的腿成立：被跳过的腿不算失败，
+    # 否则带上白名单的查询会连「一条都没取到」都被记成 ok。
+    all_failed = bool(failures) and len(failures) == len(attempted) and not wrote_anything
+    # 花费按**本次 run 的增量**记：多查询 sync 共用一个客户端，累计值不能当单 run 的值。
+    requests = client.requests - requests_before
+    cost_usd = client.cost_usd - cost_before
+    responses = _archive_responses(root, run_id, client, log_start, with_records) if archive else []
+    with store.write_tx(conn):
+        store.finish_run(
+            conn, run_id, status="failed" if all_failed else "ok", requests=requests,
+            cost_usd=cost_usd, cost_basis=client.cost_basis, counts=counts,
+            responses=responses or None,
+        )
+    return {
+        "run_id": run_id,
+        "status": "failed" if all_failed else "ok",
+        "refreshed": True,
+        "counts": counts,
+        "cost": {"usd": round(cost_usd, 6), "basis": client.cost_basis, "requests": requests},
+        "responses": responses,
+        "degraded": "余额不足，已停止本次 run 的剩余源" if quota_hit else None,
+        # 与「整条查询被跳过」不同：这一条已经刷过、只是没跑完全部腿（决策 11）。
+        "quota_stopped": quota_hit,
+        "skip_reason": None,
+        "all_failed": all_failed,
+    }
+
+
 def run_search(
     root,
     spec: SearchSpec,
@@ -319,81 +493,27 @@ def run_search(
         from_date, to_date = config.date_window(
             since_years=spec.since_years, lookback_days=lookback_days, today=today
         )
-        outcome = Outcome()
-        do_refresh = _should_refresh(conn, spec_key, refresh, max_age_hours)
-        if do_refresh:
-            outcome.network = True
-            client = client or make_client()
-            with store.write_tx(conn):
-                run_id = store.start_run(
-                    conn, spec_hash=spec_key, query_name=None, refreshed=True,
-                    window_from=from_date, window_to=to_date,
-                )
-            failures: list[dict] = []
-            by_source: dict[str, int] = {}
-            new_candidates = 0
-            dedup_blocked = 0
-            wrote_anything = False
-            for source in sources:
-                if source in skipped:
-                    by_source[source] = 0
-                    continue
-                try:
-                    records = _fetch(client, source, spec, sort=sort,
-                                     from_date=from_date, to_date=to_date,
-                                     venue_ids=venue_ids)
-                except SourceError as exc:
-                    failures.append({"source": source, "reason": exc.reason})
-                    by_source[source] = 0
-                    continue
-                by_source[source] = len(records)
-                if records:
-                    wrote_anything = True
-                with store.write_tx(conn):
-                    for record in records:
-                        result = group.ingest(conn, record, run_id=run_id,
-                                              blocked_venues=blocked_venues)
-                        if result.new_candidate:
-                            new_candidates += 1
-                        if result.dedup_level:
-                            dedup_blocked += 1
-            counts = {
-                "new_candidates": new_candidates,
-                "dedup_blocked": dedup_blocked,
-                "by_source": by_source,
-                "failures": failures,
-            }
-            # 「全失败」只对**真的发过请求**的腿成立：被跳过的腿不算失败，
-            # 否则带上白名单的查询会连「一条都没取到」都被记成 ok。
-            attempted = [s for s in sources if s not in skipped]
-            all_failed = bool(failures) and len(failures) == len(attempted) and not wrote_anything
-            with store.write_tx(conn):
-                store.finish_run(
-                    conn, run_id, status="failed" if all_failed else "ok", requests=client.requests,
-                    cost_usd=client.cost_usd, cost_basis=client.cost_basis, counts=counts,
-                )
-            if all_failed:
-                raise envelope.EnvelopeError(
-                    envelope.SOURCE_ERROR,
-                    "全部源失败且无写入：" + "; ".join(f["source"] + "=" + f["reason"] for f in failures),
-                )
-            outcome.run_id = run_id
-            outcome.counts = counts
-            outcome.requests = client.requests
-            outcome.cost_usd = client.cost_usd
-            outcome.cost_basis = client.cost_basis
-        else:
-            with store.write_tx(conn):
-                run_id = store.start_run(
-                    conn, spec_hash=spec_key, query_name=None, refreshed=False,
-                    window_from=from_date, window_to=to_date,
-                )
-                store.finish_run(conn, run_id, status="ok", requests=0, cost_usd=0.0,
-                                 cost_basis="跳过联网", counts={})
-            outcome.run_id = run_id
-            if refresh == "auto":
-                outcome.degraded = {"reason": "同一检索式在新鲜度窗口内，跳过联网（--refresh auto）"}
-
+        collected = collect_run(
+            conn, root, spec, spec_key=spec_key, query_name=None, sources=sources,
+            refresh=refresh, max_age_hours=max_age_hours, from_date=from_date,
+            to_date=to_date, venue_ids=venue_ids, blocked_venues=blocked_venues,
+            skipped=skipped, sort=sort, client=client,
+        )
+        if collected["all_failed"]:
+            failures = collected["counts"]["failures"]
+            raise envelope.EnvelopeError(
+                envelope.SOURCE_ERROR,
+                "全部源失败且无写入：" + "; ".join(f["source"] + "=" + f["reason"] for f in failures),
+            )
+        outcome = Outcome(
+            network=collected["refreshed"],
+            requests=collected["cost"]["requests"],
+            cost_usd=collected["cost"]["usd"],
+            cost_basis=collected["cost"]["basis"],
+            degraded={"reason": collected["degraded"]} if collected["degraded"] else None,
+            counts=collected["counts"],
+            run_id=collected["run_id"],
+        )
         keys = local_work_keys(
             conn, spec, sources=sources, from_date=from_date, to_date=to_date,
             in_scope=in_scope, root=root,
@@ -404,6 +524,194 @@ def run_search(
             include=abstract,
             chars=abstract_chars,
         )
+        return outcome
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------
+# sync：画像里的具名查询（ADR-0066）
+# --------------------------------------------------------------------------
+
+@dataclass
+class SyncOutcome:
+    """一次 `sync` 的结果：逐 run 自包含，调用级只留 `degraded`（ADR-0066 决策 4）。"""
+
+    runs: list = field(default_factory=list)
+    degraded: dict | None = None
+
+    def payload(self) -> dict:
+        data: dict = {"runs": self.runs}
+        if self.degraded is not None:
+            data["degraded"] = self.degraded
+        return data
+
+
+def _select_queries(profile, names: Iterable[str], *, today=None) -> list:
+    """`--query` 的解析语义（ADR-0066 决策 8）。
+
+    缺省 = 画像里全部启用且未过期的查询；显式点名必须解析得到、启用、未过期——
+    静默跳过一件画像明说不做的事，只会让整次调用白跑。
+    """
+    wanted = [str(name).strip() for name in names if str(name).strip()]
+    if not wanted:
+        runnable = [q for q in profile.enabled_queries() if not q.expired(today)]
+        if not runnable:
+            raise envelope.EnvelopeError(
+                envelope.INVALID_ARGS,
+                "画像里没有启用且未过期的查询；enabled 与 expires 都在 config/profile.toml 里",
+            )
+        return runnable
+    chosen = []
+    for name in wanted:
+        query = profile.by_name(name)
+        if query is None:
+            available = "、".join(q.name for q in profile.queries) or "（画像里没有 [[query]]）"
+            raise envelope.EnvelopeError(
+                envelope.INVALID_ARGS, "画像里没有这条查询：" + name + "；可用：" + available
+            )
+        if not query.enabled:
+            raise envelope.EnvelopeError(
+                envelope.INVALID_ARGS,
+                "查询 " + name + " 在画像里是 enabled = false；先改画像，再点名它",
+            )
+        if query.expired(today):
+            raise envelope.EnvelopeError(
+                envelope.INVALID_ARGS,
+                "查询 " + name + " 已过期（expires = " + str(query.expires) + "）",
+            )
+        chosen.append(query)
+    return chosen
+
+
+def _sync_degraded(fresh: int, quota_skips: int, quota_stops: int, total: int) -> dict | None:
+    """调用级降级汇总——`degraded` 是调用级唯一的家（ADR-0066 决策 4/7/11）。
+
+    `quota_skips` 是整条查询没联网，`quota_stops` 是刷到一半被余额拦下——
+    `sync` 把两者分开报，是因为后者已经写进了东西，读报告的人不该以为它什么都没做。
+    """
+    parts = []
+    if fresh:
+        parts.append(str(fresh) + "/" + str(total) + " 条查询在新鲜度窗口内，跳过联网")
+    if quota_skips:
+        parts.append("余额不足，只查本地（" + str(quota_skips) + "/" + str(total) + " 条查询）")
+    if quota_stops:
+        parts.append("余额不足，另有 " + str(quota_stops) + " 条查询只跑完部分源")
+    return {"reason": "；".join(parts)} if parts else None
+
+
+def _query_window(conn, query, *, lookback_days: int, today):
+    """窗口按查询现场算：**首次执行**用它的 `since_years`，否则用 `lookback_days`。
+
+    判据是该 `query_name` 在账本里有没有成功行，不新增列（ADR-0066 决策 9）。
+    画像里后来新加的方向因此能按自己的 `since_years` 回溯，而不是永远只有 30 天。
+    """
+    if store.has_successful_query(conn, query.name):
+        return config.date_window(lookback_days=lookback_days, today=today)
+    return config.date_window(since_years=query.since_years, today=today)
+
+
+def _query_spec(query) -> SearchSpec:
+    return SearchSpec(
+        all_of=list(query.all_of),
+        any_of=list(query.any_of),
+        venues=list(query.venues),
+        authors=list(query.authors),
+        since_years=query.since_years,
+    )
+
+
+def run_sync(
+    root,
+    *,
+    queries: Iterable[str] = (),
+    refresh: str = "auto",
+    sources: Iterable[str] | None = None,
+    client=None,
+    today=None,
+) -> SyncOutcome:
+    """执行画像里的具名查询：一条查询一行 `run`、一个目录、一份报告（ADR-0066）。
+
+    只有 `sync` 落 `data/runs/<run_id>/`——`search` / `lookup` 只写账本行，
+    因为留档的消费者是调度器与事后审计，而按交互次数增长的 `data/runs/` 是
+    ADR-0055 代价 5 担心的那件事（ADR-0066 决策 6）。
+    """
+    root = str(root)
+    profile, errors = config.load_profile(root)
+    if profile is None:
+        message = errors[0].message if errors else (
+            "没有 profile：" + str(config.config_dir(root) / config.PROFILE)
+        )
+        raise envelope.EnvelopeError(
+            envelope.PROFILE_INVALID if errors else envelope.NO_PROFILE, message
+        )
+    cfg = config.load_search(root)
+    selected = _select_queries(profile, queries, today=today)
+    enabled = config.load_sources(root)
+    source_list = list(sources) if sources is not None else list(config.active_sources(enabled))
+    blocked_venues = _resolve_names(cfg.venue_blacklist, what="venue 黑名单")
+    timezone_name = report.local_timezone()
+
+    conn = store.connect(config.db_path(root))
+    try:
+        client = client or make_client()
+        entries: list[dict] = []
+        bodies: list[str] = []
+        fresh_skips = 0
+        quota_skips = 0
+        quota_stops = 0
+        failed = 0
+        for query in selected:
+            spec = _query_spec(query)
+            venue_ids = _resolve_names(spec.venues, what="query " + query.name + " 的 venue 白名单")
+            skipped = _skip_legs(spec, venue_ids=venue_ids)
+            spec_key = config.spec_hash(
+                all_of=spec.all_of, any_of=spec.any_of, venues=spec.venues,
+                authors=spec.authors, since_years=spec.since_years,
+                sources=source_list, sort="date",
+                min_citations=spec.min_citations, min_fwci=spec.min_fwci,
+            )
+            from_date, to_date = _query_window(
+                conn, query, lookback_days=cfg.lookback_days, today=today
+            )
+            collected = collect_run(
+                conn, root, spec, spec_key=spec_key, query_name=query.name,
+                sources=source_list, refresh=refresh, max_age_hours=cfg.max_age_hours,
+                from_date=from_date, to_date=to_date, venue_ids=venue_ids,
+                blocked_venues=blocked_venues, skipped=skipped, sort="date",
+                client=client, quota_min_usd=cfg.min_remaining_usd, archive=True,
+            )
+            if collected["all_failed"]:
+                failed += 1
+            if collected["skip_reason"] == "freshness":
+                fresh_skips += 1
+            elif collected["skip_reason"] == "quota":
+                quota_skips += 1
+            if collected.get("quota_stopped"):
+                quota_stops += 1
+            # items 两栏只装本次 run 才入池的候选（ADR-0066 决策 3）
+            items = []
+            for key in store.candidates_first_seen_in_run(conn, collected["run_id"]):
+                work = store.aggregate_work(conn, key)
+                if work is not None:
+                    items.append(report.minimal_item(work))
+            run_json = report.build_run_json(
+                store.get_run(conn, collected["run_id"]),
+                command="sync",
+                timezone_name=timezone_name,
+                items=report.classify_items(items, window_from=from_date, window_to=to_date),
+            )
+            report.write_run(root, run_json)
+            entries.append(report.stdout_entry(run_json))
+            bodies.append(report.render_report(run_json))
+        report.write_latest_report(root, bodies)
+        if selected and failed == len(selected):
+            raise envelope.EnvelopeError(
+                envelope.SOURCE_ERROR,
+                "全部 " + str(failed) + " 条查询都失败且零写入；细节见 data/runs/ 下的 run.json",
+            )
+        outcome = SyncOutcome(runs=entries)
+        outcome.degraded = _sync_degraded(fresh_skips, quota_skips, quota_stops, len(selected))
         return outcome
     finally:
         conn.close()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import urllib.error
@@ -35,6 +36,25 @@ class HttpBytesResponse:
     headers: dict = field(default_factory=dict)
 
 
+@dataclass
+class HttpExchange:
+    """一次**文本**请求的原文与元数据，供 run 收尾时挑选落盘（ADR-0066 决策 10）。
+
+    `n` 是客户端内的请求序号；一次 run 归档时会按该 run 的切片重新编号。
+    失败请求也在其中：`status` 为 HTTP 状态码，网络层失败为 `0`、`text` 为空。
+    """
+
+    n: int
+    source: str
+    url: str
+    status: int
+    text: str
+    sha256: str
+
+    def payload(self) -> bytes:
+        return self.text.encode("utf-8")
+
+
 class HttpClient:
     """带最小间隔的同步客户端；每次请求记录花费头。"""
 
@@ -44,16 +64,24 @@ class HttpClient:
         self.timeout = timeout
         self.min_interval = min_interval or {}
         self._last: dict[str, float] = {}
+        self.log: list[HttpExchange] = []
         self.requests: int = 0
         self.cost_usd: float = 0.0
         self.cost_basis: str = ""
         self.rate_remaining_usd: float | None = None
 
     def get(self, url: str, *, headers: dict | None = None, source: str = "") -> HttpResponse:
-        raw = self.get_bytes(url, headers=headers, source=source)
-        return HttpResponse(
-            raw.url, raw.status, raw.content.decode("utf-8", errors="replace"), raw.headers
-        )
+        """取文本响应，并把这次请求记进 `log`（留档用；`get_bytes` 不记，二进制不入档）。"""
+        try:
+            raw = self.get_bytes(url, headers=headers, source=source)
+        except SourceError as exc:
+            self._record_exchange(
+                source, url, exc.status or 0, (exc.body or b"").decode("utf-8", errors="replace")
+            )
+            raise
+        text = raw.content.decode("utf-8", errors="replace")
+        self._record_exchange(source, url, raw.status, text)
+        return HttpResponse(raw.url, raw.status, text, raw.headers)
 
     def get_bytes(self, url: str, *, headers: dict | None = None, source: str = "",
                   raise_on_error: bool = True,
@@ -110,15 +138,38 @@ class HttpClient:
             except ValueError:
                 pass
 
+    def _record_exchange(self, source: str, url: str, status: int, text: str) -> None:
+        raw = text.encode("utf-8")
+        self.log.append(
+            HttpExchange(
+                n=len(self.log) + 1,
+                source=source or "http",
+                url=url,
+                status=status,
+                text=text,
+                sha256=hashlib.sha256(raw).hexdigest(),
+            )
+        )
+
     @staticmethod
     def _classify(source: str, exc: urllib.error.HTTPError) -> SourceError:
-        if exc.code == 429:
-            return SourceError(source or "http", "429 限流或额度耗尽", True)
-        if exc.code in (401, 402, 403):
-            return SourceError(source or "http", "HTTP " + str(exc.code) + " 授权/额度", True)
-        if exc.code == 404:
-            return SourceError(source or "http", "404 未找到", False)
-        return SourceError(source or "http", "HTTP " + str(exc.code), True)
+        """HTTP 失败 → SourceError；带上状态码与错误正文（失败页要留档）。"""
+        try:
+            body = exc.read() or b""
+        except Exception:  # noqa: BLE001 - 错误正文读不到不影响失败本身
+            body = b""
+        code = exc.code
+        if code == 429:
+            reason = "429 限流或额度耗尽"
+        elif code in (401, 402, 403):
+            reason = "HTTP " + str(code) + " 授权/额度"
+        elif code == 404:
+            reason = "404 未找到"
+        else:
+            reason = "HTTP " + str(code)
+        return SourceError(
+            source or "http", reason, code not in (404,), status=code, body=body
+        )
 
 
 def build_url(base: str, params: dict) -> str:

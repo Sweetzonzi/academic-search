@@ -62,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
     lookup.add_argument("--limit", type=int, default=20)
     lookup.add_argument("--refresh", choices=["auto", "true", "false"], default="auto")
 
+    sync = sub.add_parser("sync", help="画像里的具名查询 → 采集 → 落候选池 → 报告")
+    sync.add_argument("--query", action="append", default=[], metavar="名",
+                      help="具名查询，可重复；缺省 = 画像里全部启用且未过期的查询")
+    sync.add_argument("--refresh", choices=["auto", "true", "false"], default="auto")
+
     profile = sub.add_parser("profile", help="画像的只读通道")
     profile_sub = profile.add_subparsers(dest="subcommand", required=True)
     profile_sub.add_parser("show")
@@ -108,6 +113,10 @@ def _dispatch(args, name: str):
             refresh=args.refresh, limit=args.limit, venue_blacklist=cfg.venue_blacklist,
             mailto=cfg.mailto,
         )
+        return outcome.payload(), 0
+
+    if name == "sync":
+        outcome = service.run_sync(root, queries=list(args.query), refresh=args.refresh)
         return outcome.payload(), 0
 
     if name == "verify":

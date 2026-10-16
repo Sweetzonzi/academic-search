@@ -17,16 +17,22 @@ from . import envelope
 
 #: sidecar 整库版本，与对外的 envelope.SCHEMA_VERSION 是两件事。
 #: 2：`record.venue_source_ids`（ADR-0060）、`record_ident.kind`（ADR-0064）。
-SCHEMA_VERSION = 2
+#: 3：删掉 `run.last_success_watermark`（ADR-0066 决策 13）。
+SCHEMA_VERSION = 3
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
-#: 逐版迁移。**只加列**（IFACE-DATA §6：不改唯一键、不改 record_uid 的派生规则）。
-#: 新库由 schema.sql 一次建全，因此每条都先查 `PRAGMA table_info` 再决定加不加。
-_MIGRATIONS: dict[int, tuple[tuple[str, str, str], ...]] = {
+#: 逐版迁移，每项写作 `("add", 表, 列, DDL)` 或 `("drop", 表, 列)`。
+#: **只加列是常态**（IFACE-DATA §6：不改唯一键、不改 record_uid 的派生规则）；
+#: 第 3 版是唯一的删列，依据是实测该列 213 行全为 NULL（ADR-0066 决策 13）。
+#: 新库由 schema.sql 一次建全，因此每条都先查 `PRAGMA table_info` 再决定动不动。
+_MIGRATIONS: dict[int, tuple[tuple[str, ...], ...]] = {
     2: (
-        ("record", "venue_source_ids", "venue_source_ids TEXT"),
-        ("record_ident", "kind", "kind TEXT NOT NULL DEFAULT 'ident'"),
+        ("add", "record", "venue_source_ids", "venue_source_ids TEXT"),
+        ("add", "record_ident", "kind", "kind TEXT NOT NULL DEFAULT 'ident'"),
+    ),
+    3: (
+        ("drop", "run", "last_success_watermark"),
     ),
 }
 
@@ -54,10 +60,28 @@ def connect(db_path: str | Path, *, create: bool = True) -> sqlite3.Connection:
     return conn
 
 
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row["name"] for row in conn.execute("PRAGMA table_info(" + table + ")")}
+
+
 def _add_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(" + table + ")")}
-    if column not in existing:
+    if column not in _columns(conn, table):
         conn.execute("ALTER TABLE " + table + " ADD COLUMN " + ddl)
+
+
+def _drop_column(conn: sqlite3.Connection, table: str, column: str) -> None:
+    """删列（SQLite ≥ 3.35；实测本机 3.45.3）。列已不在即无操作。"""
+    if column in _columns(conn, table):
+        conn.execute("ALTER TABLE " + table + " DROP COLUMN " + column)
+
+
+def _apply_migration(conn: sqlite3.Connection, op: tuple[str, ...]) -> None:
+    if op[0] == "add":
+        _add_column(conn, op[1], op[2], op[3])
+    elif op[0] == "drop":
+        _drop_column(conn, op[1], op[2])
+    else:
+        raise envelope.EnvelopeError(envelope.INTERNAL_ERROR, "未知迁移操作：" + str(op[0]))
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -72,8 +96,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     for version in sorted(_MIGRATIONS):
         if current >= version:
             continue
-        for table, column, ddl in _MIGRATIONS[version]:
-            _add_column(conn, table, column, ddl)
+        for op in _MIGRATIONS[version]:
+            _apply_migration(conn, op)
         current = version
     if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
         conn.execute("PRAGMA user_version = " + str(SCHEMA_VERSION))
@@ -130,13 +154,12 @@ def finish_run(
     cost_basis: str | None,
     counts: Mapping | None,
     responses: Sequence | None = None,
-    last_success_watermark: str | None = None,
 ) -> None:
     conn.execute(
         """
         UPDATE run
            SET finished_at = ?, status = ?, requests = ?, cost_usd = ?, cost_basis = ?,
-               counts = ?, responses = ?, last_success_watermark = ?
+               counts = ?, responses = ?
          WHERE run_id = ?
         """,
         (
@@ -147,7 +170,6 @@ def finish_run(
             cost_basis,
             json.dumps(counts, ensure_ascii=False) if counts is not None else None,
             json.dumps(responses, ensure_ascii=False) if responses is not None else None,
-            last_success_watermark,
             run_id,
         ),
     )
@@ -164,6 +186,22 @@ def last_refresh_at(conn: sqlite3.Connection, spec_hash: str) -> str | None:
         (spec_hash,),
     ).fetchone()
     return row["started_at"] if row else None
+
+
+def has_successful_query(conn: sqlite3.Connection, query_name: str) -> bool:
+    """该具名查询在账本里有没有成功行——ADR-0066 决策 9 的「首次执行」判据。"""
+    row = conn.execute(
+        "SELECT 1 FROM run WHERE query_name = ? AND status = 'ok' LIMIT 1", (query_name,)
+    ).fetchone()
+    return row is not None
+
+
+def candidates_first_seen_in_run(conn: sqlite3.Connection, run_id: int) -> list[str]:
+    """本次 run 才入池的 `work_key`（ADR-0066 决策 3 的「新发现」候选集）。"""
+    rows = conn.execute(
+        "SELECT work_key FROM candidate WHERE first_run_id = ? ORDER BY work_key", (run_id,)
+    ).fetchall()
+    return [row["work_key"] for row in rows]
 
 
 def get_run(conn: sqlite3.Connection, run_id: int) -> sqlite3.Row | None:

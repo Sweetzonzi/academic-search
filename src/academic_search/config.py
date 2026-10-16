@@ -38,6 +38,8 @@ DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_ABSTRACT_CHARS = 800
 DEFAULT_MIN_GRADE = "B"
 DEFAULT_SINCE_YEARS = 3
+#: 剩余额度低于它就停止联网（ADR-0066 决策 11）。依据：实测约 $0.001 / 次检索。
+DEFAULT_MIN_REMAINING_USD = 0.05
 LANG_DEFAULT = "zh"
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -113,6 +115,7 @@ class SearchConfig:
     min_grade: str = DEFAULT_MIN_GRADE
     venue_blacklist: list[str] = field(default_factory=list)
     mailto: str | None = None
+    min_remaining_usd: float = DEFAULT_MIN_REMAINING_USD
 
 
 def config_dir(root: str | Path) -> Path:
@@ -264,6 +267,7 @@ def load_search(root: str | Path) -> SearchConfig:
         quality = raw.get("quality") or {}
         abstract = raw.get("abstract") or {}
         contact = raw.get("contact") or {}
+        quota = raw.get("quota") or {}
         if isinstance(contact, dict) and contact.get("mailto"):
             cfg.mailto = str(contact["mailto"]).strip() or None
         if isinstance(refresh, dict) and "max_age_hours" in refresh:
@@ -277,6 +281,8 @@ def load_search(root: str | Path) -> SearchConfig:
                 cfg.min_grade = str(quality["min_grade"])
             if "venue_blacklist" in quality:
                 cfg.venue_blacklist = _str_list(quality["venue_blacklist"])
+        if isinstance(quota, dict) and "min_remaining_usd" in quota:
+            cfg.min_remaining_usd = float(quota["min_remaining_usd"])
     return cfg
 
 

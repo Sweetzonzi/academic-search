@@ -111,8 +111,7 @@ CREATE TABLE IF NOT EXISTS run (
     cost_usd        REAL NOT NULL DEFAULT 0.0,
     cost_basis      TEXT,
     counts          TEXT,
-    responses       TEXT,
-    last_success_watermark TEXT
+    responses       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_run_spec ON run(spec_hash, refreshed, status);
 

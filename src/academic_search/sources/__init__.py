@@ -9,13 +9,26 @@ from dataclasses import dataclass, field
 
 
 class SourceError(Exception):
-    """某个源的失败；reason 进 counts.failures[]，不阻断其它源。"""
+    """某个源的失败；reason 进 counts.failures[]，不阻断其它源。
 
-    def __init__(self, source: str, reason: str, retryable: bool = True):
+    `status` / `body` 只服务失败页留档（ADR-0066 决策 10）：HTTP 失败时带上
+    状态码与错误正文，网络层失败两者均缺席。
+    """
+
+    def __init__(
+        self,
+        source: str,
+        reason: str,
+        retryable: bool = True,
+        status: int | None = None,
+        body: bytes = b"",
+    ):
         super().__init__(source + ": " + reason)
         self.source = source
         self.reason = reason
         self.retryable = retryable
+        self.status = status
+        self.body = body
 
 
 #: DOI 的 URL / scheme 前缀。**前缀由 adaptor 负责剥**（IFACE-STORE §1）。
