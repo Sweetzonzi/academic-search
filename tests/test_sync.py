@@ -314,6 +314,39 @@ def test_archived_responses_match_their_bytes(root, capsys, monkeypatch):
     assert {item["source"] for item in doc["responses"]} == {"openalex", "arxiv"}
 
 
+def test_archived_urls_do_not_carry_credentials(root, capsys, monkeypatch):
+    """留档落在会备份、会被人读的 `data/runs/` 里，请求 URL 上的 key 不能照抄进去。"""
+    monkeypatch.setenv("OPENALEX_API_KEY", "SECRETKEY")
+    write_profile(root, '[[query]]\nname = "alpha"\nall_of = ["attention"]\n')
+    code, env, _ = run_sync(root, capsys, monkeypatch)
+    assert code == 0
+    run_id = env["data"]["runs"][0]["run_id"]
+    text = (report.run_dir(root, run_id) / report.RUN_JSON).read_text(encoding="utf-8")
+    assert "SECRETKEY" not in text
+    assert "api_key=REDACTED" in text
+    assert "SECRETKEY" not in json.dumps(env, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://api.openalex.org/works?filter=doi:10.1/x&api_key=abc", "api_key=REDACTED"),
+        ("https://api.openalex.org/works?filter=doi:10.1/x", None),
+        ("https://api.openalex.org/works", None),
+    ],
+)
+def test_redact_url_only_touches_credentials(url, expected):
+    from academic_search.sources.http import redact_url
+
+    result = redact_url(url)
+    if expected is None:
+        assert result == url
+    else:
+        assert expected in result
+        assert "abc" not in result
+        assert "filter=doi" in result
+
+
 def test_low_quota_stops_the_remaining_legs_and_queries(root, capsys, monkeypatch):
     write_profile(root, TWO_QUERIES)
     write_search_config(root, "[quota]\nmin_remaining_usd = 0.5\n")

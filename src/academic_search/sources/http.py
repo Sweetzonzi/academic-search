@@ -14,6 +14,31 @@ from . import SourceError
 
 DEFAULT_USER_AGENT = "academic-search/0.0.0 (+local-first literature CLI)"
 
+#: 请求 URL 查询串里**不得进留档**的参数名（凭据只走环境变量）。
+#: 留档落在 `data/runs/`，那是会被备份、会被人读的目录——照抄请求 URL 等于把 key 写进去。
+SENSITIVE_PARAMS = frozenset(
+    {"api_key", "apikey", "api-key", "key", "token", "access_token", "api_token"}
+)
+
+
+def redact_url(url: str) -> str:
+    """把 URL 查询串里的凭据换成 `REDACTED`，其余逐字不动。
+
+    只动凭据参数；`mailto` / `filter` / `per_page` 这些要照原样留下，
+    否则留档就答不了「这次请求长什么样」（[ADR-0066](../../../docs/决策/ADR-0066.md) 决策 10）。
+    """
+    parts = urllib.parse.urlsplit(url)
+    if not parts.query:
+        return url
+    pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    if not any(name.lower() in SENSITIVE_PARAMS for name, _ in pairs):
+        return url
+    redacted = [
+        (name, "REDACTED" if name.lower() in SENSITIVE_PARAMS else value)
+        for name, value in pairs
+    ]
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(redacted)))
+
 
 @dataclass
 class HttpResponse:
@@ -144,7 +169,7 @@ class HttpClient:
             HttpExchange(
                 n=len(self.log) + 1,
                 source=source or "http",
-                url=url,
+                url=redact_url(url),
                 status=status,
                 text=text,
                 sha256=hashlib.sha256(raw).hexdigest(),

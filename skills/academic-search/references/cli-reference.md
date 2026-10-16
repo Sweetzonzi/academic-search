@@ -16,7 +16,7 @@
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
 | `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，所以 `--limit 5` 之后池子里仍会多出 95 条 |
 | `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
-| `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §4 |
+| `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §5 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
 | `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`（按需生成的正文目录）；还没有生成过正文时，效果等于 `meta` |
 | `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档是两次不同的请求，各抓一次，因此换档会联网、也各算一次检索。注意它排的是**全局**被引，见下面的坑 |
@@ -83,7 +83,7 @@ scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limi
 |---|---|---|
 | `--doi` / `--arxiv` / `--title` | — | **必须给一个**（一个都不给 → `ok=false`、`error.code=invalid_args`）；同时给多个时优先级 `--doi` > `--arxiv` > `--title`（实测） |
 | `--limit N` | `20` | 只影响 `--title` 参与匹配的条目数 |
-| `--refresh auto\|true\|false` | `auto` | 见 §4。`true` = **先刷再查本地**（本地已命中也会去更新引用、撤稿标记与载体）；`auto` = 只有本地未命中才联网；`--title` 两种档下都不联网（标题不是标识，用不了单实体 GET），`true` 时会进 `degraded` 并说明 |
+| `--refresh auto\|true\|false` | `auto` | 见 §5。`true` = **先刷再查本地**（本地已命中也会去更新引用、撤稿标记与载体）；`auto` = 只有本地未命中才联网；`--title` 两种档下都不联网（标题不是标识，用不了单实体 GET），`true` 时会进 `degraded` 并说明 |
 
 ```powershell
 scripts/run.cmd lookup --arxiv 2610.18808 --refresh false   # 只读本地，零联网
@@ -100,7 +100,51 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 
 ---
 
-## 3. `profile`
+## 3. `sync`
+
+按名字跑 `config/profile.toml` 里的**具名查询**：联网采集 → 落候选池 → 写报告。**初版唯一按名字执行检索式的入口**，供任意调度器无头调用（工具本身不含调度语义）。
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--query 名` | 画像里全部 `enabled = true` 且未过期的查询 | 可重复。**解析不到、或解析到但 `enabled = false` / 已过期 → `ok=false`、`error.code=invalid_args`**——显式点名一件画像明说不做的事是调用方的错，静默跳过会让整次调用白跑。画像缺失 → `no_profile`；画像里一条可跑的查询都没有 → `invalid_args` |
+| `--refresh auto\|true\|false` | `auto` | 见 §5。按**每条查询各自的 `spec_hash`** 各记各的；跳过时该 run 照样写一行，`refreshed = false`、零成本 |
+
+```powershell
+# a) 跑画像里全部启用的查询
+scripts/run.cmd sync
+
+# b) 只跑一条，并强制联网
+scripts/run.cmd sync --query world-model-uav --refresh true
+
+# c) 只查本地（零请求、零成本）——想把报告重出一遍时用
+scripts/run.cmd sync --refresh false
+```
+
+**每次调用写这些**：
+
+- `data/runs/<run_id>/run.json` + `report.md`——**一条查询一行账本、一个目录、一份报告**。报告正文两栏：**新发表**（`published_at` 落在本次窗口内）与**新发现**（本次才入池、发表更早）。
+- `data/latest-report.md`——**最近一次调用**的汇总，按查询分节；单查询调用时与那份 `report.md` 逐字相同。
+- `data/runs/<run_id>/responses/<n>-<source>.json`——被留档的响应原文（产生了入库记录的页，以及失败的页）。`run.json` 的 `responses[]` 记 `{n, sha256, source, url, page, status}`；`url` 里的凭据记 `REDACTED`。
+- **只有 `sync` 落 `data/runs/`**：`search` / `lookup` 只写账本行（交互式检索没有留档的消费者，而 `data/runs/` 会随调用次数增长）。
+
+**信封**（`data`）：`{runs: [{run_id, status, query, spec_hash, refreshed, window: {from, to}, counts, cost}, …], degraded?: {reason}}`。
+
+- **逐 run 自包含，没有调用级合计**：`counts` / `cost` 都在每个元素里，要总数自己求和。`network` 不是顶层字段——它等于各 `runs[].refreshed` 的或。
+- **不返回结果清单**：清单在 `run.json` 的 `items.new_published` / `items.new_discovered` 里，stdout 只给调度器一眼判断成败。
+- `degraded` 是**调用级**的：部分查询因新鲜度跳过、或余额不足，都汇总在这一句话里。
+
+**窗口**：每次现算，上界恒为今天。
+
+- **首次执行**（该 `query_name` 在账本里还没有 `status = 'ok'` 的行）用**它自己的** `since_years`；跑过之后一律用 `config/search.toml` 的 `sync.lookback_days`（默认 30）。画像里后来新加的方向因此能各自回溯，不会永远只有 30 天。
+- 上界不拿「本次实际取到的最大 `publication_date`」回填——窗口是**请求的口径**，用取到的结果当上界会让「这次取到哪一年」悄悄改变下一次的窗口。
+
+**与 `search` 共用一本账**（`docs/决策/ADR-0049.md`、`docs/决策/ADR-0066.md`）：判据是 `spec_hash`，不是命令名。某条查询刚被一次字段等价的 `search` 刷过，`sync` 也会跳过它——这是账本判据的直接结果，不是故障。要补漏就给 `--refresh true`。
+
+**额度**：`config/search.toml` 的 `quota.min_remaining_usd`（默认 `0.05`）。OpenAlex 的响应带回剩余额度，**低于它就不再发后续请求**，等价 `--refresh false`，并进 `degraded.reason`。一次 `sync` 共用一个客户端，所以前一条查询读到的余额会拦住后一条。
+
+---
+
+## 4. `profile`
 
 | 子命令 | 作用 | 载荷 |
 |---|---|---|
@@ -110,34 +154,36 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 
 - **CLI 从不写配置**：新建与修改由 agent 直接编辑 `config/profile.toml`，改完跑 `profile check`。
 - **每条 query 至少给 `all_of` 或 `any_of` 一组**，这是硬校验，实测 `profile check` 会报错——与 §1 的「空检索式 = 列全部」不是一回事。
-- 没有 `config/profile.toml` 时 `profile show` 返回 `error.code=no_profile`。创建流程见 SKILL.md §4，字段见 §7。
+- 没有 `config/profile.toml` 时 `profile show` 返回 `error.code=no_profile`。创建流程见 SKILL.md §4，字段见 §8。
 
 ---
 
-## 4. `--refresh` 三值
+## 5. `--refresh` 三值
 
 `--refresh` **必须显式写出三值之一**：
 
 | 取值 | 含义 |
 |---|---|
-| `auto`（默认） | **`search`**：同一检索式在 `refresh.max_age_hours`（默认 24 小时）内查过就跳过联网，并在 `data.degraded.reason` 里说明。**`lookup`**：本地标识未命中才联网（不看时间） |
-| `true` | **先刷新，再查库**——两条命令同义。`lookup` 在本地已命中时也会刷 |
+| `auto`（默认） | **`search`**：同一检索式在 `refresh.max_age_hours`（默认 24 小时）内查过就跳过联网，并在 `data.degraded.reason` 里说明。**`sync`**：同一条查询按**各自的 `spec_hash`** 判，与 `search` 共用一本账。**`lookup`**：本地标识未命中才联网（不看时间） |
+| `true` | **先刷新，再查库**——三条命令同义。`lookup` 在本地已命中时也会刷 |
 | `false` | **绝不联网**，只读本地库 |
 
 `search` 的判据是**检索式**，不是全局时间：换个关键词就是另一次检索。只有**会改变远端请求**的参数参与判定——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--abstract` / `--in` 不参与，所以换个 `--limit` 仍算同一次检索、不会重新联网。只有**真正联网成功过**的那次才算「新鲜」，所以离线查询不会把 `auto` 锁死。
+
+`sync` 用的是 `search` 那本新鲜度账，判据同为 `spec_hash`（`docs/决策/ADR-0066.md` 决策 7）。一次 `sync` 里若两条查询字段等价，后一条会命中前一条刚写的账而跳过——这是账本判据的直接结果，不额外去重。
 
 `lookup` **不走这本新鲜度账**：它按标识取，`auto` 的判据只是「本地有没有命中」（口径见 `docs/决策/ADR-0065.md`）。所以同一篇 `lookup` 两次，两次都是零请求；想更新引用数就显式给 `true`。
 
 ---
 
-## 5. `verify` 与 `version`
+## 6. `verify` 与 `version`
 
 - `verify [--sample N]`：抽样重算 `bytes/` 里文件的 `sha256` 并与文件名比对。`--sample` 默认 20，**`0` = 全量**；只读、不修复；发现不匹配即 `error.code=io_error`、退出码 1 并列出文件。`bytes/` 下还没有产物时它是空跑（`mismatches: []`）。
 - `version`：`data = {version, schema}`，自检用。
 
 ---
 
-## 6. 信封里的载荷
+## 7. 信封里的载荷
 
 `data.items[]` 的字段：
 
@@ -167,7 +213,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 
 ---
 
-## 7. `config/profile.toml`
+## 8. `config/profile.toml`
 
 一个关注方向就是一条 `[[query]]`。
 
@@ -203,7 +249,7 @@ expires = "2026-12-31"
 
 ---
 
-## 8. 错误码
+## 9. 错误码
 
 `ok=false` 时看 `error.code`：
 

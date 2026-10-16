@@ -23,7 +23,7 @@ agent_created: true
 2. **每条结果都带出处**：`doi` / `arxiv_id` / `work_key`，另有 `sources[]` 说明该条由哪几条来源记录合成、各自扮演什么角色。
 3. **联网是可选的**：默认只在库内数据过期时才联网，也可以要求强制刷新或完全离线。
 
-**尚未实现的部分**：不接 Zotero，不调用任何 LLM，不下载 PDF；`sync` / `textify` / `read` / `digest` / `export` 等子命令尚未接线（见 §7）。文中标「实测」的结论是实际运行验证过的，不是从上游文档推断的。
+**尚未实现的部分**：不接 Zotero，不调用任何 LLM，不下载 PDF；`textify` / `read` / `digest` / `export` 等子命令尚未接线（见 §7）。文中标「实测」的结论是实际运行验证过的，不是从上游文档推断的。
 
 ## 1. 调用入口
 
@@ -41,7 +41,7 @@ agent_created: true
 | 问一个具体问题、要一批论文 | `search --all-of` / `--any-of` 给一组词 |
 | 看**本地库里**已经有什么（不联网、零成本） | `search` 不给检索式 + `--refresh false` |
 | 拿到确定的某一篇 | `lookup --doi` / `--arxiv` / `--title` 三选一 |
-| 某个方向的最新进展 | 只有 `search --refresh true`（`sync` 未接线） |
+| 某个方向的最新进展 | `sync`（按 `config/profile.toml` 里的具名查询跑，产出报告文件）；一次性的临时检索用 `search --refresh true` |
 | 某个方向**最新**的高被引论文 | `search --min-citations N`（或 `--min-fwci X` 跨领域比）。这两个是**取数条件**，会多花一次请求，默认按日期取数，所以带回的是「最新的、被引超过阈值的一批」 |
 | 某个方向的**经典**（全局被引头部） | 在上面基础上再加 `--sort citations`。它排的是**全局**被引、不是相关性，头部会有跨领域命中，必须逐条复核主题（§6 第 6 条） |
 | **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给名字（会议与期刊都可以，如 `IEEE T-RO` / `JAAMAS` / `AAMAS`）；清单在 `src/academic_search/venues.toml`（16 条），**解析不到会报错**。给了它会跳过 arXiv 腿 |
@@ -69,9 +69,10 @@ agent_created: true
 | `profile show` / `check` / `scaffold` | 读 `config/profile.toml` | 可用 |
 | `verify` | 抽样重算 `bytes/` 的 sha256 | 可用 |
 | `version` | 版本与 `schema` 版本 | 可用 |
-| `sync` / `textify` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 尚未实现 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。要新论文用 `search --refresh true` |
+| `sync` | 跑 `config/profile.toml` 里的具名查询 → 联网采集 → 落候选池 → 写报告 | 可用；参数与产物见 `references/cli-reference.md` §3 |
+| `textify` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 尚未实现 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。要新论文用 `search --refresh true` |
 
-**注意**：`config/profile.toml` 里保存的检索式**不能按名字跑**——`search` 只接受当场给的检索式（按名字执行的那条链路尚未接线）。要用某条保存的检索式，把它的字段原样抄到命令上；字段一致就是同一次检索，会命中同一条新鲜度记录、不重复联网。
+**注意**：按名字跑用 `sync`（`search` 只接受当场给的检索式）。两者**共用同一本账本**，判据是检索式字段而不是命令名——字段一致就是同一次检索，会命中同一条新鲜度记录、不重复联网；反过来，某条查询刚被一次字段等价的 `search` 刷过，`sync` 也会跳过它并在 `degraded` 里说明。
 
 ## 4. 没有 `config/profile.toml` 时怎么办
 
@@ -81,19 +82,20 @@ agent_created: true
 2. 把初稿逐条摆给用户确认增删：方向名、`all_of` / `any_of`、venue 白名单、回看窗口。
 3. 写 `config/profile.toml` → `profile check` → 把解析结果回显给用户。
 
-**CLI 不写配置**：新建与修改都由你直接写文件，**改完必跑 `profile check`**。用户随时可以要求修改，改文件重跑即可，没有别的通道。字段表与示例见 `references/cli-reference.md` §7。
+**CLI 不写配置**：新建与修改都由你直接写文件，**改完必跑 `profile check`**。用户随时可以要求修改，改文件重跑即可，没有别的通道。字段表与示例见 `references/cli-reference.md` §8。
 
 ## 5. 读信封与退出码
 
 - `data.items[]`：结果条目。**答用户时至少给 `title` + `published_at` +（`doi` 或 `arxiv_id`）+ `sources[]`。**
-- `data.items[].abstract`：**按需出现**——`lookup` 固定带完整摘要；`search` 只有开了 `--abstract` 才带截断版（长度走 `config/search.toml`）。要引用摘要原文或照它翻译前，先读 `references/cli-reference.md` §1 与 §6：**它可能来自预印本稿，或者是 OpenAlex 倒排索引的还原产物**，载荷不带标记。
+- `data.items[].abstract`：**按需出现**——`lookup` 固定带完整摘要；`search` 只有开了 `--abstract` 才带截断版（长度走 `config/search.toml`）。要引用摘要原文或照它翻译前，先读 `references/cli-reference.md` §1 与 §7：**它可能来自预印本稿，或者是 OpenAlex 倒排索引的还原产物**，载荷不带标记。
 - `data.network`：本次有没有发过请求；`data.cost`：`{usd, basis, requests}`（`basis` 是计费口径）。
 - `data.counts.failures[]`：部分源失败。**部分失败不算失败**：`ok` 仍为 true、退出码 0，如实汇报哪个源没成。
 - `data.degraded.reason`：本次降级了（余额不足只查本地、新鲜度跳过联网、或 `--title` 配 `--refresh true` 时只能查本地）。**降级不是错误，不要重试。**
+- **`sync` 的信封不一样**：`data.runs[]` 逐 run 自包含（没有调用级 `counts` / `cost` 合计），而且**不返回结果清单**——清单在 `data/runs/<run_id>/run.json` 里，人读同目录的 `report.md` 与 `data/latest-report.md`。要点见 `references/cli-reference.md` §3。
 - `data.items[].dup_suspect = true`：疑似同一篇但**未合并**，引用时必须说明。
 - `data.items[].is_retracted = true`：撤稿，不要推荐。
 - **退出码**：`0` = 有产出，`1` = 没有产出（细分看 `error.code`）。**参数写错是例外**：argparse 直接退出，退出码 2、stderr 打 usage、没有 JSON 信封——别把「非 0 就一定有信封」当前提。
-- `ok=false` 时看 `error.code`：可重试的只有 `busy` / `source_error` / `network_error` / `rate_limited`，且**只重试一次**；其余按 `error.message` 修（完整错误码表见 `references/cli-reference.md` §8）。
+- `ok=false` 时看 `error.code`：可重试的只有 `busy` / `source_error` / `network_error` / `rate_limited`，且**只重试一次**；其余按 `error.message` 修（完整错误码表见 `references/cli-reference.md` §9）。
 
 ## 6. 硬规则
 
@@ -109,7 +111,7 @@ agent_created: true
 - **需要一个可用的 Python**（`>=3.11`，用到标准库 `tomllib`）。启动器找解释器的顺序：先看 `ACADEMIC_SEARCH_PYTHON`，没设则 Windows 依次试 `python`、`py`，POSIX 依次试 `python3`、`python`；Windows 版还会先探测解释器能不能执行 `import sys`，探测失败即退出码 1、**不产出 JSON 信封**（实测：`python` 命中应用商店存根时就是这样）。这属于环境问题、不是源失败，把 `ACADEMIC_SEARCH_PYTHON` 指到真解释器即可。
 - **OpenAlex 需要 API key**：匿名档的每日额度按出口 IP 共享、很容易耗尽（额度用尽时返回 429）。要用 OpenAlex，先把 key 放进环境变量 `OPENALEX_API_KEY`；只用 `--source arxiv` 则不需要任何凭据。
 - 结果里每条 `sources[].source` 说明该项来自哪个源、扮演什么角色（`preprint` / `primary` / `published`）。
-- 未接线：`sync` / `textify` / `read` / `digest list|put` / `export` / `bundle`；`promote` / `graph` 同样尚未实现。
+- 未接线：`textify` / `read` / `digest list|put` / `export` / `bundle`；`promote` / `graph` 同样尚未实现。
 
 ## 8. references（按需读，不要默认加载）
 
