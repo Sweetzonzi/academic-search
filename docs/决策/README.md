@@ -91,4 +91,5 @@ title: "设计决策索引"
 | [ADR-0063](ADR-0063.md) | 检索门 | 主题条件改用 `search.title_and_abstract=` 的单个布尔串；每个值一律加引号（因此不需要转义层）；结构化条件继续走 `filter=` | accepted |
 | [ADR-0064](ADR-0064.md) | L1 补桥 | 桥是「声明」不是「标识」：`record_ident` 区分 `ident` / `bridge`，桥可被真正的持有者接管；校验落在 `ingest()` 的 L1 分支且归组前做 | accepted |
 | [ADR-0065](ADR-0065.md) | `lookup` 的刷新语义 | 两条命令的 `--refresh` 三档同义：`true` 无条件先刷再查本地、`auto` 未命中才联网、`false` 绝不联网；`--title` 在 `true` 下降级为只查本地并标注 | accepted |
+| [ADR-0066](ADR-0066.md) | `sync` 的运行粒度与产物形状 | 一条具名查询 = 一行 `run`（不改表）；`run.json` 收敛为单数并装「新发表 / 新发现」两栏；stdout 逐 run 自包含、不设调用级合计；报告每条 run 一份、`latest-report.md` 为调用汇总；另定刷新档位、查询解析、窗口与首次执行、响应留档与额度阈值；删「水位」术语与 `last_success_watermark` 列 | accepted |
 
