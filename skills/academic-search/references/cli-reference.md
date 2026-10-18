@@ -16,7 +16,7 @@
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
 | `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，所以 `--limit 5` 之后池子里仍会多出 95 条 |
 | `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
-| `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §5 |
+| `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §6 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
 | `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`（按需生成的正文目录）；还没有生成过正文时，效果等于 `meta` |
 | `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档是两次不同的请求，各抓一次，因此换档会联网、也各算一次检索。注意它排的是**全局**被引，见下面的坑 |
@@ -83,7 +83,7 @@ scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limi
 |---|---|---|
 | `--doi` / `--arxiv` / `--title` | — | **必须给一个**（一个都不给 → `ok=false`、`error.code=invalid_args`）；同时给多个时优先级 `--doi` > `--arxiv` > `--title`（实测） |
 | `--limit N` | `20` | 只影响 `--title` 参与匹配的条目数 |
-| `--refresh auto\|true\|false` | `auto` | 见 §5。`true` = **先刷再查本地**（本地已命中也会去更新引用、撤稿标记与载体）；`auto` = 只有本地未命中才联网；`--title` 两种档下都不联网（标题不是标识，用不了单实体 GET），`true` 时会进 `degraded` 并说明 |
+| `--refresh auto\|true\|false` | `auto` | 见 §6。`true` = **先刷再查本地**（本地已命中也会去更新引用、撤稿标记与载体）；`auto` = 只有本地未命中才联网；`--title` 两种档下都不联网（标题不是标识，用不了单实体 GET），`true` 时会进 `degraded` 并说明 |
 
 ```powershell
 scripts/run.cmd lookup --arxiv 2610.18808 --refresh false   # 只读本地，零联网
@@ -100,14 +100,58 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 
 ---
 
-## 3. `sync`
+## 3. `download`
+
+取一篇的**原始字节**（arXiv LaTeX 源码 / arXiv HTML / PDF）存进本地库。**不转换成 Markdown**——那是 `read` 的事。
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--work work_key` | 必填 | 要哪一篇的原件；`work_key` 来自 `search` / `lookup` 的结果条目 |
+| `--source auto\|latex\|html\|pdf\|all` | `auto` | `auto` = LaTeX 源码优先、没有就回退 arXiv HTML（一次拿到一份能用的原件）；`latex` / `html` 指定即**不回退**；`pdf` 只在显式写 `pdf` 或 `all` 时下载，**只下载不解析**；`all` = 三条都取 |
+| `--refresh auto\|true\|false` | `auto` | `auto` = 本地已有**同一版本**就零请求复用；`true` = 无视版本重取（arXiv 没变会回 **304**，不重下字节）；`false` = 绝不联网 |
+
+**落到哪**：原件进内容寻址的 `bytes/`（只存一份，同名实体复用），并在 `works/<work_key>/` 建一份投影：`source.tar.gz` / `source.html` / `source.pdf`。投影是硬链接，删掉重跑一次就回来——**不要把这些路径存下来**。
+
+**信封**（`data`）：`{work_key, record_uid, arxiv_id, artifacts[], network, cost}`。`artifacts[]` **逐取件路线一行**：
+
+| 字段 | 说明 |
+|---|---|
+| `kind` | `source_tar_gz`（LaTeX 源码包）/ `source_html`（arXiv HTML）/ `source_pdf` |
+| `status` | `fetched`（这次取的）/ `reused`（命中缓存或 304）/ `failed`（附 `reason` 与取件路线 `source`） |
+| `source_version` | 取的是哪一版（`v1` / `v2`…）；`null` = 不知道 |
+| `sha256` / `size` | 字节的身份与大小 |
+| `path` / `work_path` | `bytes/` 里的实体 / `works/` 里的投影（投影不在时没有这个键） |
+
+```powershell
+# 拿一份能读的原件（LaTeX 优先，没有就回退 HTML）
+scripts/run.cmd download --work <work_key> --refresh auto
+
+# 只要 PDF（只下载，不解析）
+scripts/run.cmd download --work <work_key> --source pdf --refresh auto
+
+# 三条都要
+scripts/run.cmd download --work <work_key> --source all --refresh auto
+
+# 联网确认有没有更新（arXiv 没变回 304，不重下字节）
+scripts/run.cmd download --work <work_key> --refresh true
+```
+
+- **判据是版本相等**：`search` / `lookup` 刷到的远端版本与本地取过的一致，`auto` 就零请求。版本未知（旧记录还没被元数据刷新过）时会**先读一次 arXiv feed** 补上，所以那一次是两个请求，之后不再发生。
+- **`auto` 的回退是静默的**，但 `artifacts[]` 留着失败那条（`status="failed"` + `reason`）——要判断拿到的是 LaTeX 还是 HTML，看 `kind`。
+- **一篇一次最多 3 个请求**（`all`），而 arXiv 有 3 秒请求间隔：不要对着候选列表逐篇跑。
+- `--refresh false` 且本地没有这份原件 → `error.code=projection_missing`，重试无用。
+- 非 arXiv 记录报 `source_error`：初版只从 arXiv 取原件。
+
+---
+
+## 4. `sync`
 
 按名字跑 `config/profile.toml` 里的**具名查询**：联网采集 → 落候选池 → 写报告。**初版唯一按名字执行检索式的入口**，供任意调度器无头调用（工具本身不含调度语义）。
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--query 名` | 画像里全部 `enabled = true` 且未过期的查询 | 可重复。**解析不到、或解析到但 `enabled = false` / 已过期 → `ok=false`、`error.code=invalid_args`**——显式点名一件画像明说不做的事是调用方的错，静默跳过会让整次调用白跑。画像缺失 → `no_profile`；画像里一条可跑的查询都没有 → `invalid_args` |
-| `--refresh auto\|true\|false` | `auto` | 见 §5。按**每条查询各自的 `spec_hash`** 各记各的；跳过时该 run 照样写一行，`refreshed = false`、零成本 |
+| `--refresh auto\|true\|false` | `auto` | 见 §6。按**每条查询各自的 `spec_hash`** 各记各的；跳过时该 run 照样写一行，`refreshed = false`、零成本 |
 
 ```powershell
 # a) 跑画像里全部启用的查询
@@ -144,7 +188,7 @@ scripts/run.cmd sync --refresh false
 
 ---
 
-## 4. `profile`
+## 5. `profile`
 
 | 子命令 | 作用 | 载荷 |
 |---|---|---|
@@ -154,11 +198,11 @@ scripts/run.cmd sync --refresh false
 
 - **CLI 从不写配置**：新建与修改由 agent 直接编辑 `config/profile.toml`，改完跑 `profile check`。
 - **每条 query 至少给 `all_of` 或 `any_of` 一组**，这是硬校验，实测 `profile check` 会报错——与 §1 的「空检索式 = 列全部」不是一回事。
-- 没有 `config/profile.toml` 时 `profile show` 返回 `error.code=no_profile`。创建流程见 SKILL.md §4，字段见 §8。
+- 没有 `config/profile.toml` 时 `profile show` 返回 `error.code=no_profile`。创建流程见 SKILL.md §4，字段见 §9。
 
 ---
 
-## 5. `--refresh` 三值
+## 6. `--refresh` 三值
 
 `--refresh` **必须显式写出三值之一**：
 
@@ -176,14 +220,14 @@ scripts/run.cmd sync --refresh false
 
 ---
 
-## 6. `verify` 与 `version`
+## 7. `verify` 与 `version`
 
 - `verify [--sample N]`：抽样重算 `bytes/` 里文件的 `sha256` 并与文件名比对。`--sample` 默认 20，**`0` = 全量**；只读、不修复；发现不匹配即 `error.code=io_error`、退出码 1 并列出文件。`bytes/` 下还没有产物时它是空跑（`mismatches: []`）。
 - `version`：`data = {version, schema}`，自检用。
 
 ---
 
-## 7. 信封里的载荷
+## 8. 信封里的载荷
 
 `data.items[]` 的字段：
 
@@ -213,7 +257,7 @@ scripts/run.cmd sync --refresh false
 
 ---
 
-## 8. `config/profile.toml`
+## 9. `config/profile.toml`
 
 一个关注方向就是一条 `[[query]]`。
 
@@ -249,7 +293,7 @@ expires = "2026-12-31"
 
 ---
 
-## 9. 错误码
+## 10. 错误码
 
 `ok=false` 时看 `error.code`：
 
