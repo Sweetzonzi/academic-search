@@ -314,3 +314,5 @@ expires = "2026-12-31"
 | `internal_error` | 未分类缺陷 | ❌ | 报缺陷 |
 
 可重试的**只重试一次**。`source_error` / `network_error` / `rate_limited` 在**仍产出结果**时不走本表，只记进 `counts.failures[]` / `degraded`。
+
+**缺 pandoc 也报 `source_error`**，但那不是网络问题、重试无用——按 `error.message` 把它装好（获取方式与三处查找顺序见 SKILL.md §7）。

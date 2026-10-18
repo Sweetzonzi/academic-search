@@ -113,6 +113,7 @@ agent_created: true
 
 - **需要一个可用的 Python**（`>=3.11`，用到标准库 `tomllib`）。启动器找解释器的顺序：先看 `ACADEMIC_SEARCH_PYTHON`，没设则 Windows 依次试 `python`、`py`，POSIX 依次试 `python3`、`python`；Windows 版还会先探测解释器能不能执行 `import sys`，探测失败即退出码 1、**不产出 JSON 信封**（实测：`python` 命中应用商店存根时就是这样）。这属于环境问题、不是源失败，把 `ACADEMIC_SEARCH_PYTHON` 指到真解释器即可。
 - **OpenAlex 需要 API key**：匿名档的每日额度按出口 IP 共享、很容易耗尽（额度用尽时返回 429）。要用 OpenAlex，先把 key 放进环境变量 `OPENALEX_API_KEY`；只用 `--source arxiv` 则不需要任何凭据。
+- **转换链需要一个 pandoc**：把 LaTeX 源码或 arXiv HTML 转成 Markdown（唯一消费者 `read` 尚未接线，见本节末）。可执行文件单件约 220 MB（官方压缩包约 40 MB），**不进版本库**，故按下面顺序找：环境变量 `ACADEMIC_SEARCH_PANDOC`（指向可执行文件本身）→ 仓库根的 `vendor/pandoc/pandoc.exe`（POSIX 上是 `pandoc`）→ `PATH`。装法：从官方下载页 `https://github.com/jgm/pandoc/releases/latest` 取 `pandoc-<版本>-windows-x86_64.zip` 或 `pandoc-<版本>-linux-amd64.tar.gz`（静态链接，解出即用），把可执行文件放进 `vendor/pandoc/`；或用包管理器（`winget install --source winget --exact --id JohnMacFarlane.Pandoc`、`choco install pandoc`、`brew install pandoc`）。**换 pandoc 版本会让已转好的正文按过期处理**，要重转一次；缺它时报 `source_error`、不产出正文。
 - 结果里每条 `sources[].source` 说明该项来自哪个源、扮演什么角色（`preprint` / `primary` / `published`）。
 - 未接线：`read` / `digest list|put` / `export` / `bundle`；`promote` / `graph` 同样尚未实现。
 - `download` 只从 **arXiv** 取原件：「要原文」对非 arXiv 记录会报 `source_error`。
