@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from academic_search import paths
@@ -56,6 +58,17 @@ def test_project_bytes_hardlinks(tmp_path):
         # 硬链接：改写副本即改写实体
         dest.write_bytes(b"changed")
         assert paths.byte_path(tmp_path, digest).read_bytes() == b"changed"
+
+
+def test_reprojecting_the_same_entity_keeps_bytes_readonly(tmp_path):
+    """重投影是常态（download 命中缓存时也做）：不能顺手把 bytes/ 的只读去掉。"""
+    digest = paths.store_bytes(tmp_path, b"source")
+    entity = paths.byte_path(tmp_path, digest)
+    dest = paths.work_dir(tmp_path, "wk") / "source.tar.gz"
+    assert paths.project_bytes(tmp_path, digest, dest) is True
+    assert paths.project_bytes(tmp_path, digest, dest) is True
+    assert not os.access(entity, os.W_OK)  # 只读属性还在
+    assert os.stat(entity).st_ino == os.stat(dest).st_ino
 
 
 def test_verify_bytes_detects_tamper(tmp_path):

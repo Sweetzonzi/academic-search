@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import pathlib
 import sqlite3
 
 import pytest
 
 from academic_search import envelope, store
+
+_SCHEMA_SQL = pathlib.Path(store.__file__).with_name("schema.sql")
 
 
 @pytest.fixture()
@@ -156,3 +159,54 @@ def test_foreign_keys_on(conn):
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO work_member (record_uid, work_key, role) VALUES ('x','y','primary')")
+
+
+def test_artifact_keeps_the_new_columns_and_is_idempotent(conn):
+    with store.write_tx(conn):
+        store.start_run(conn, spec_hash="h", query_name=None, refreshed=False,
+                        window_from=None, window_to=None)
+        store.insert_record(conn, _record(uid="u1"))
+        store.add_artifact(conn, "u1", "source_html", "a" * 64, None, None,
+                           source_version="v3", etag='"e"', last_modified="LM")
+        # 同一份字节再登记一次：不新增行，空值不抹掉已有值
+        store.add_artifact(conn, "u1", "source_html", "a" * 64, None, None)
+    rows = conn.execute("SELECT * FROM artifact").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["source_version"] == "v3"
+    assert rows[0]["etag"] == '"e"' and rows[0]["last_modified"] == "LM"
+
+
+def test_migration_adds_fulltext_version_columns_to_a_v3_database(tmp_path):
+    """旧库（user_version=3）打开后升到 4：三列加好，存量行不受影响。"""
+    db = tmp_path / "data" / "sidecar.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    raw = sqlite3.connect(str(db))
+    # 先建全量 DDL，再把 v4 加的那几列拆掉，得到一个真实的 v3 库
+    raw.executescript(_SCHEMA_SQL.read_text(encoding="utf-8"))
+    for table, column in (
+        ("record", "source_version"),
+        ("artifact", "source_version"),
+        ("artifact", "etag"),
+        ("artifact", "last_modified"),
+    ):
+        raw.execute("ALTER TABLE " + table + " DROP COLUMN " + column)
+    raw.execute("INSERT INTO record (record_uid, source, source_id, title)"
+                " VALUES ('u1', 'arxiv', '2610.00001', 'T')")
+    raw.execute("INSERT INTO artifact VALUES ('u1', 'source_tar_gz', '%s', NULL, NULL)" % ("b" * 64))
+    raw.execute("PRAGMA user_version = 3")
+    raw.commit()
+    raw.close()
+
+    conn = store.connect(db)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
+        record_cols = {row["name"] for row in conn.execute("PRAGMA table_info(record)")}
+        artifact_cols = {row["name"] for row in conn.execute("PRAGMA table_info(artifact)")}
+        assert "source_version" in record_cols
+        assert {"source_version", "etag", "last_modified"} <= artifact_cols
+        assert conn.execute("SELECT COUNT(*) AS n FROM artifact").fetchone()["n"] == 1
+        with store.write_tx(conn):
+            store.add_artifact(conn, "u1", "source_pdf", "c" * 64, None, None)
+    finally:
+        conn.close()
+

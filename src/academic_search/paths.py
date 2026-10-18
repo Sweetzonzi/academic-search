@@ -103,6 +103,13 @@ def hardlink_or_copy(src: str | Path, dest: str | Path) -> bool:
     src_path, dest_path = Path(src), Path(dest)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     if dest_path.exists():
+        # 已经是同一条链就什么都不做：删掉重建要 chmod 源实体，会把 bytes/ 的只读去掉
+        # （重投影是常态——`download` 命中缓存时也会重投影）
+        try:
+            if os.path.samefile(src_path, dest_path):
+                return True
+        except OSError:
+            pass
         make_writable(dest_path)
         dest_path.unlink()
     try:

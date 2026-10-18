@@ -177,6 +177,19 @@ def test_lookup_carries_full_abstract(root):
     assert outcome.items[0]["abstract"] == "abcdefghij"
 
 
+def test_lookup_writes_the_arxiv_version(root):
+    """元数据刷新把 feed 里的 vN 写进 record.source_version；非 arXiv 记录留 NULL。"""
+    service.run_lookup(root, arxiv_id="2610.18808", refresh="true", client=FixtureClient())
+    conn = store.connect(config.db_path(root))
+    try:
+        versions = {row["source"]: row["source_version"]
+                    for row in conn.execute("SELECT source, source_version FROM record")}
+    finally:
+        conn.close()
+    assert versions.get("arxiv") == "v1"
+    assert versions.get("openalex") is None
+
+
 def test_cli_search_abstract_uses_config_chars(root, capsys):
     (root / "config" / "search.toml").write_text("[abstract]\nchars = 4\n", encoding="utf-8")
     _insert_abstract_work(root)

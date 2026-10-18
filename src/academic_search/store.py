@@ -18,7 +18,8 @@ from . import envelope
 #: sidecar 整库版本，与对外的 envelope.SCHEMA_VERSION 是两件事。
 #: 2：`record.venue_source_ids`（ADR-0060）、`record_ident.kind`（ADR-0064）。
 #: 3：删掉 `run.last_success_watermark`（ADR-0066 决策 13）。
-SCHEMA_VERSION = 3
+#: 4：`record.source_version`、`artifact` 的版本与 HTTP 验证器三列（ADR-0067）。
+SCHEMA_VERSION = 4
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -33,6 +34,12 @@ _MIGRATIONS: dict[int, tuple[tuple[str, ...], ...]] = {
     ),
     3: (
         ("drop", "run", "last_success_watermark"),
+    ),
+    4: (
+        ("add", "record", "source_version", "source_version TEXT"),
+        ("add", "artifact", "source_version", "source_version TEXT"),
+        ("add", "artifact", "etag", "etag TEXT"),
+        ("add", "artifact", "last_modified", "last_modified TEXT"),
     ),
 }
 
@@ -235,6 +242,7 @@ RECORD_FIELDS = (
     "is_retracted",
     "oa_status",
     "pdf_url",
+    "source_version",
     "metadata_conflict",
 )
 
@@ -508,13 +516,32 @@ def add_artifact(
     sha256: str,
     converter: str | None,
     converter_version: str | None,
+    *,
+    source_version: str | None = None,
+    etag: str | None = None,
+    last_modified: str | None = None,
 ) -> None:
+    """登记一份产物；同一 `(record_uid, kind, sha256)` 再登记只补空列、不抹已有值。
+
+    三元组本身就是幂等键，因此「同一份字节再取一次」不会长出第二行；
+    换转换器重转出同一份字节时，新给的非 NULL 值会写进去（IFACE-DATA §3.7）。
+    """
     conn.execute(
         """
-        INSERT OR IGNORE INTO artifact (record_uid, kind, sha256, converter, converter_version)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO artifact (record_uid, kind, sha256, converter, converter_version,
+                              source_version, etag, last_modified)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (record_uid, kind, sha256) DO UPDATE SET
+            converter = coalesce(excluded.converter, artifact.converter),
+            converter_version = coalesce(excluded.converter_version, artifact.converter_version),
+            source_version = coalesce(excluded.source_version, artifact.source_version),
+            etag = coalesce(excluded.etag, artifact.etag),
+            last_modified = coalesce(excluded.last_modified, artifact.last_modified)
         """,
-        (record_uid, kind, sha256, converter, converter_version),
+        (
+            record_uid, kind, sha256, converter, converter_version,
+            source_version, etag, last_modified,
+        ),
     )
 
 

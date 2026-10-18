@@ -819,6 +819,248 @@ def run_lookup(
         conn.close()
 
 # --------------------------------------------------------------------------
+# download：取原件 → bytes/ → artifact → works/ 投影（ADR-0067）
+# --------------------------------------------------------------------------
+
+#: 取件路线 → `artifact.kind`；`source_*` 是**抓来的原件**，`paper_*` 才是转换产物。
+DOWNLOAD_KINDS = {
+    "latex": "source_tar_gz",
+    "html": "source_html",
+    "pdf": "source_pdf",
+}
+
+#: 投影到 `works/<work_key>/` 时的文件名（IFACE-STORE §5 的 `source.*`）。
+PROJECTION_NAMES = {
+    "source_tar_gz": "source.tar.gz",
+    "source_html": "source.html",
+    "source_pdf": "source.pdf",
+}
+
+DOWNLOAD_SOURCES = ("auto", "latex", "html", "pdf", "all")
+
+#: 每条 `--source` 的取件顺序；`auto` 是唯一会回退的（ADR-0067 决策 6）。
+DOWNLOAD_PLANS = {
+    "auto": ("latex", "html"),
+    "latex": ("latex",),
+    "html": ("html",),
+    "pdf": ("pdf",),
+    "all": ("latex", "html", "pdf"),
+}
+
+
+@dataclass
+class DownloadOutcome:
+    """一次取件的结果；`artifacts[]` 逐路线一行，含失败的那几条（IFACE-PAYLOAD §5.1）。"""
+
+    work_key: str = ""
+    record_uid: str = ""
+    arxiv_id: str = ""
+    artifacts: list = field(default_factory=list)
+    network: bool = False
+    requests: int = 0
+    cost_usd: float = 0.0
+    cost_basis: str = ""
+    run_id: int | None = None
+
+    def payload(self) -> dict:
+        return {
+            "work_key": self.work_key,
+            "record_uid": self.record_uid,
+            "arxiv_id": self.arxiv_id,
+            "artifacts": self.artifacts,
+            "network": self.network,
+            "cost": {
+                "usd": round(self.cost_usd, 6),
+                "basis": self.cost_basis or ("本次未联网" if not self.network else ""),
+                "requests": self.requests,
+            },
+        }
+
+
+def same_version(local: str | None, remote: str | None) -> bool:
+    """版本相等才算同一份；**任一侧 NULL 视为不等**（ADR-0067 决策 4）。"""
+    return local is not None and remote is not None and local == remote
+
+
+def _learn_version(client, arxiv_id: str) -> str | None:
+    """从 feed 读一次当前版本，读不到就返回 None。
+
+    只在 `record.source_version` 为空时用：不补这一次，按「NULL 视为不等」
+    过渡期每次取件都会把源码包整份重下一遍（ADR-0067 决策 3 的代价 3）。
+    """
+    try:
+        records = arxiv_source.lookup(client, arxiv_id)
+    except SourceError:
+        return None
+    for record in records:
+        if record.get("source_version"):
+            return record["source_version"]
+    return None
+
+
+#: 这些键即使没有值也照样出现（显式 null 比缺席更好判：IFACE-PAYLOAD §5.1）。
+_ARTIFACT_ALWAYS = frozenset({"source_version"})
+
+
+def _artifact_entry(kind: str, status: str, **extra) -> dict:
+    entry = {"kind": kind, "status": status}
+    for key, value in extra.items():
+        if value is not None or key in _ARTIFACT_ALWAYS:
+            entry[key] = value
+    return entry
+
+
+def _reuse(root, cached) -> dict:
+    """命中缓存：不再发请求，路径与大小现场算（IFACE-STORE §2：路径不落库）。"""
+    sha = cached["sha256"]
+    return _artifact_entry(
+        cached["kind"], "reused", sha256=sha,
+        source_version=cached["source_version"],
+        size=paths.byte_path(root, sha).stat().st_size,
+        path=str(paths.byte_path(root, sha)),
+    )
+
+
+def run_download(
+    root,
+    work_key: str,
+    *,
+    source: str = "auto",
+    refresh: str = "auto",
+    client=None,
+) -> DownloadOutcome:
+    """取**原始字节**存 `bytes/`、投影 `works/<work_key>/source.*`、登记 `artifact`。
+
+    契约：IFACE §1 的 download 行、IFACE-PAYLOAD §5.1、ADR-0067 决策 4/5/6。
+    **这里不转换**——转换属于 `read`。缓存判据是版本相等：`--refresh auto` 命中即零请求，
+    `true` 无视版本、带验证器做条件 GET（304 复用已有字节），`false` 只读本地。
+    """
+    if source not in DOWNLOAD_SOURCES:
+        raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知 --source：" + str(source))
+    if refresh not in ("auto", "true", "false"):
+        raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知 --refresh：" + str(refresh))
+    root = str(root)
+    conn = store.connect(config.db_path(root))
+    try:
+        work_key = store.resolve_work(conn, work_key)
+        member, arxiv_id = _pick_record(conn, work_key)
+        record_uid = member["record_uid"]
+        remote_version = member["source_version"]
+        outcome = DownloadOutcome(work_key=work_key, record_uid=record_uid, arxiv_id=arxiv_id)
+        client = client or make_client()
+        requests_before, cost_before = client.requests, client.cost_usd
+        if refresh != "false" and remote_version is None:
+            remote_version = _learn_version(client, arxiv_id)
+            if remote_version:
+                with store.write_tx(conn):
+                    store.update_record(conn, record_uid, {"source_version": remote_version})
+        failures: list[dict] = []
+        pending: list[tuple] = []
+
+        for route in DOWNLOAD_PLANS[source]:
+            kind = DOWNLOAD_KINDS[route]
+            cached = store.artifact_of(conn, record_uid, kind)
+            usable = cached is not None and paths.byte_path(root, cached["sha256"]).is_file()
+            matched = usable and same_version(cached["source_version"], remote_version)
+            if refresh == "false" or (refresh == "auto" and matched):
+                if usable:
+                    outcome.artifacts.append(_reuse(root, cached))
+                    if source == "auto":
+                        break
+                    continue
+                reason = "本地没有这份产物，且 --refresh false 不联网"
+                failures.append({"kind": kind, "reason": reason})
+                outcome.artifacts.append(_artifact_entry(kind, "failed", source=route, reason=reason))
+                continue
+            # auto 钉住 record 声明的版本，true 取不带版本号的 URL（逃生口：不怕 HTML 重渲染，ADR-0067 决策 5）
+            version = remote_version if refresh == "auto" else None
+            headers = {}
+            if refresh == "true" and usable:
+                if cached["etag"]:
+                    headers["If-None-Match"] = cached["etag"]
+                if cached["last_modified"]:
+                    headers["If-Modified-Since"] = cached["last_modified"]
+            try:
+                blob = arxiv_source.fetch_source(client, route, arxiv_id, version=version, headers=headers)
+            except SourceError as exc:
+                failures.append({"kind": kind, "reason": exc.reason})
+                outcome.artifacts.append(
+                    _artifact_entry(kind, "failed", source=route, reason=exc.reason)
+                )
+                continue
+            if blob.status == 304 and usable:
+                outcome.artifacts.append(_reuse(root, cached))
+                if source == "auto":
+                    break
+                continue
+            if blob.status != 200:
+                reason = "HTTP " + str(blob.status)
+                failures.append({"kind": kind, "reason": reason})
+                outcome.artifacts.append(_artifact_entry(kind, "failed", source=route, reason=reason))
+                continue
+            if not blob.content:
+                reason = "响应正文为空"
+                failures.append({"kind": kind, "reason": reason})
+                outcome.artifacts.append(_artifact_entry(kind, "failed", source=route, reason=reason))
+                continue
+            headers_lower = {key.lower(): value for key, value in blob.headers.items()}
+            sha = paths.store_bytes(root, blob.content)
+            # 取件那一刻 record 声明的版本；true 档拿到的可能更新，宁可低估也不误报「已是最新」
+            pending.append((kind, sha, remote_version, headers_lower.get("etag"),
+                            headers_lower.get("last-modified")))
+            outcome.artifacts.append(
+                _artifact_entry(
+                    kind, "fetched", source=route, sha256=sha, size=len(blob.content),
+                    source_version=remote_version, path=str(paths.byte_path(root, sha)),
+                )
+            )
+            if source == "auto":
+                break
+
+        requests = client.requests - requests_before
+        outcome.network = requests > 0
+        outcome.requests = requests
+        outcome.cost_usd = client.cost_usd - cost_before
+        outcome.cost_basis = client.cost_basis
+        served = [item for item in outcome.artifacts if item["status"] in ("fetched", "reused")]
+        if requests:
+            with store.write_tx(conn):
+                outcome.run_id = store.start_run(
+                    conn, spec_hash=None, query_name=None, refreshed=True,
+                    window_from=None, window_to=None,
+                )
+                for kind, sha, source_version, etag, last_modified in pending:
+                    store.add_artifact(
+                        conn, record_uid, kind, sha, None, None,
+                        source_version=source_version, etag=etag, last_modified=last_modified,
+                    )
+                store.finish_run(
+                    conn, outcome.run_id, status="ok" if served else "failed",
+                    requests=requests, cost_usd=outcome.cost_usd, cost_basis=client.cost_basis,
+                    counts={"artifacts": [item[0] for item in pending], "failures": failures},
+                )
+        if not served:
+            if refresh == "false":
+                raise envelope.EnvelopeError(
+                    envelope.PROJECTION_MISSING,
+                    "本地没有这份原件，且 --refresh false 不联网；去掉 --refresh false 重跑",
+                )
+            detail = "; ".join(item["kind"] + "=" + item["reason"] for item in failures)
+            raise envelope.EnvelopeError(envelope.SOURCE_ERROR, "取件失败：" + detail)
+
+        target = paths.work_dir(root, work_key)
+        for item in served:
+            name = PROJECTION_NAMES.get(item["kind"])
+            if not name:
+                continue
+            paths.project_bytes(root, item["sha256"], target / name)
+            item["work_path"] = str(target / name)
+        return outcome
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------
 # textify：取原生文本源 → 转换（M1.5；落盘与 artifact 登记归 M2）
 # --------------------------------------------------------------------------
 
@@ -878,7 +1120,7 @@ def _pick_record(conn, work_key: str, arxiv_id: str | None = None):
             return member, values[0]
     raise envelope.EnvelopeError(
         envelope.SOURCE_ERROR,
-        "该 work 没有 arXiv 记录；初版只有 arXiv LaTeX 源码与 arXiv HTML 两条路线（REQ R3）",
+        "该 work 没有 arXiv 记录；初版只从 arXiv 取原件（LaTeX 源码 / HTML / PDF，REQ R3）",
     )
 
 

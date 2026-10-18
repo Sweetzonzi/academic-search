@@ -50,6 +50,10 @@ def parse_entry(entry) -> dict:
     raw_id = _text(entry, ATOM + "id") or ""
     match = _ABS_RE.search(raw_id)
     value = match.group(1) if match else raw_id.rstrip("/").rsplit("/", 1)[-1]
+    # 版本先从 id 尾部取出来再归一掉：同一篇的 v1/v2 是同一条 record，
+    # 但「远端最新到第几版」是元数据事实，记在 record.source_version（ADR-0067 决策 3）。
+    found = _VERSION_RE.search(value)
+    source_version = found.group(0).lower() if found else None
     value = _VERSION_RE.sub("", value)
     if not value:
         raise SourceError("arxiv", "条目缺少 id", False)
@@ -69,6 +73,7 @@ def parse_entry(entry) -> dict:
         "authors": authors,
         "published_at": (_text(entry, ATOM + "published") or "")[:10] or None,
         "updated_at": (_text(entry, ATOM + "updated") or "")[:10] or None,
+        "source_version": source_version,
         "type": "preprint",
         "venue": None,
         "language": "en",
@@ -167,4 +172,50 @@ def fetch_html(client, arxiv_id: str) -> str:
     if response.status != 200:
         raise SourceError("arxiv", "HTML HTTP " + str(response.status), False)
     return response.content.decode("utf-8", "replace")
+
+
+# --------------------------------------------------------------------------
+# 取原件：给 download 用，状态码与验证器交回调用方（ADR-0067）
+# --------------------------------------------------------------------------
+
+PDF_BASE = "https://arxiv.org/pdf/"
+
+#: PDF 防呆上限：带图版的单篇论文实测可达数十 MB，超过即报错而不是截断。
+PDF_MAX_BYTES = 128 * 1024 * 1024
+
+#: 每条路线一次取件的字节上限；HTML 不给上限（它由 feed 侧的 HTML 版式决定，本就小）。
+SOURCE_MAX_BYTES = {"latex": EPRINT_MAX_BYTES, "html": None, "pdf": PDF_MAX_BYTES}
+
+SOURCE_BASES = {"latex": EPRINT_BASE, "html": HTML_BASE, "pdf": PDF_BASE}
+
+
+def source_url(route: str, arxiv_id: str, *, version: str | None = None) -> str:
+    """取件 URL；route 取 latex / html / pdf，给了 version 就钉住那一版。
+
+    钉版本是为了让「取到的字节是哪一版」成为事实而不是猜测：arXiv 的
+    /e-print/<id>v3 永久可取，返回的就是 v3 的字节（ADR-0067 决策 3）。
+    """
+    base = SOURCE_BASES.get(route)
+    if base is None:
+        raise SourceError("arxiv", "未知取件路线：" + str(route), False)
+    plain = _VERSION_RE.sub("", normalise_id(arxiv_id))
+    return base + plain + (version or "")
+
+
+def fetch_source(
+    client,
+    route: str,
+    arxiv_id: str,
+    *,
+    version: str | None = None,
+    headers: dict | None = None,
+):
+    """取原件原始字节；**不抛 4xx/5xx**——304 与 404 都是正常回答，由调用方判（ADR-0067 决策 5）。"""
+    return client.get_bytes(
+        source_url(route, arxiv_id, version=version),
+        source="arxiv",
+        headers=headers,
+        raise_on_error=False,
+        max_bytes=SOURCE_MAX_BYTES[route],
+    )
 

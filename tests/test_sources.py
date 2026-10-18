@@ -163,6 +163,9 @@ def test_arxiv_search_parses_real_fixture():
     assert first["pdf_url"] == "https://arxiv.org/pdf/2610.18808"
     assert first["abstract"]
     assert ("arxiv", "2610.18808") in first["idents"]
+    # 版本从 <id> 取出来记成元数据事实，source_id 本身不带版本（ADR-0067 决策 3）
+    assert first["source_version"] == "v1"
+    assert "v" not in first["source_id"]
 
 
 def test_arxiv_search_query_shape():

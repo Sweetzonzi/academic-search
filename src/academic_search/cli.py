@@ -67,6 +67,17 @@ def build_parser() -> argparse.ArgumentParser:
                       help="具名查询，可重复；缺省 = 画像里全部启用且未过期的查询")
     sync.add_argument("--refresh", choices=["auto", "true", "false"], default="auto")
 
+    download = sub.add_parser(
+        "download",
+        help="取原始字节（arXiv LaTeX 源码 / HTML / PDF）落 bytes/ 并投影到 works/",
+    )
+    download.add_argument("--work", required=True, metavar="work_key")
+    download.add_argument(
+        "--source", choices=list(service.DOWNLOAD_SOURCES), default="auto",
+        help="auto=LaTeX 优先、失败回退 HTML；pdf 只下载不解析；all=三者都取",
+    )
+    download.add_argument("--refresh", choices=["auto", "true", "false"], default="auto")
+
     profile = sub.add_parser("profile", help="画像的只读通道")
     profile_sub = profile.add_subparsers(dest="subcommand", required=True)
     profile_sub.add_parser("show")
@@ -113,6 +124,10 @@ def _dispatch(args, name: str):
             refresh=args.refresh, limit=args.limit, venue_blacklist=cfg.venue_blacklist,
             mailto=cfg.mailto,
         )
+        return outcome.payload(), 0
+
+    if name == "download":
+        outcome = service.run_download(root, args.work, source=args.source, refresh=args.refresh)
         return outcome.payload(), 0
 
     if name == "sync":

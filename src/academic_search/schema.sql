@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS record (
     authors         TEXT,                       -- 保序 JSON 数组
     published_at    TEXT,                       -- YYYY-MM-DD
     updated_at      TEXT,
+    source_version  TEXT,                       -- 全文的远端最新版本（arXiv 的 vN），ADR-0067
     type            TEXT,                       -- 规范值（IFACE-SOURCE §4）
     venue           TEXT,                       -- 主载体名，**只用于展示**
     venue_source_ids TEXT,                      -- 载体 source id 集合（JSON 数组，ADR-0060）
@@ -92,6 +93,9 @@ CREATE TABLE IF NOT EXISTS artifact (
     sha256          TEXT NOT NULL,
     converter       TEXT,
     converter_version TEXT,
+    source_version  TEXT,                       -- 这份字节取件时 record 声明的版本（ADR-0067）
+    etag            TEXT,                       -- 条件 GET 复用（ADR-0067 决策 5）
+    last_modified   TEXT,
     PRIMARY KEY (record_uid, kind, sha256)
 );
 CREATE INDEX IF NOT EXISTS idx_artifact_sha ON artifact(sha256);
