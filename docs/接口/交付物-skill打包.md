@@ -22,7 +22,7 @@ academic-search/            # skill bundle（**薄**：只装给 agent 读的文
 
 **launcher 的约定**：仓库根按 `--root` → `ACADEMIC_SEARCH_ROOT` → `bundle/root.txt` → **脚本往上三级**（bundle 装在仓库内时正好落在仓库根）解析。解析结果必须含 `src/academic_search/`，否则非零退出并提示怎么修——**允许失败，不允许悄悄用错根**。解释器取 `ACADEMIC_SEARCH_PYTHON`，未设则用 PATH 上的 `python`（POSIX 上优先 `python3`），并先跑一次 `-c "import sys"` 探测：Windows 上裸 `python` 常命中应用商店存根（退出码 1 且无输出），探测就是为了把这个静默失败变成一句能照做的提示。`root.txt` 是**安装时写入的本机仓库路径**，各机不同，因此不进版本库（`.gitignore` 里是 `skills/*/root.txt`）。**`.cmd` 例外为 CRLF**（`.gitattributes` 里的 `*.cmd text eol=crlf`）：实测 cmd.exe 对 LF-only 的批处理会错切行——`rem` 注释被切开、`if (...)` 块整体失效——而仓库默认 `eol=lf`。
 
-**落地现状**：`SKILL.md`、三份 `references/` 与两个 launcher 已在 `skills/academic-search/`，并在仓库根实测可用（`version`、真 arXiv 检索取回 5 条、紧随其后的 `--refresh auto` 跳过联网、仓库根指错时退出码 1）。`sync` 尚未接线，SKILL.md 的命令表把它标成「尚未接线」——**契约先写、能力后到**，免得 agent 去调一条还不存在的命令。
+**落地现状**：`SKILL.md`、三份 `references/` 与两个 launcher 已在 `skills/academic-search/`，并在仓库根实测可用（`version`、真 arXiv 检索取回 5 条、紧随其后的 `--refresh auto` 跳过联网、仓库根指错时退出码 1）。按本文装到 `~/.dsh/skills/` 也已验证（2026-10-19）：DSH 以 `filesystem` 提供方解析到该目录，`run.cmd version` 与 `profile check` 退出码 0，`search --refresh false` 回本地条目。**装的是副本**：仓库里改了 `SKILL.md` / `references/` 之后要重新复制一次，副本不会自己跟上。`ACADEMIC_SEARCH_PYTHON` 必须指向真解释器——裸 `python` 命中应用商店存根、且没有 `py` 可退时，launcher 只能报错退出（这正是设计好的失败方式）。`sync` 已接线（首次真跑见 [EX-2026-10-16-sync](../实验/EX-2026-10-16-首次真sync.md)）——**命令表的「接线状态」列必须与实现同步**：留在「尚未实现」那一行会让 agent 绕开一条已经能用的入口。
 
 **初版交付物**（M3 一并产出，[PLAN §1](../04-里程碑与计划.md)）：`SKILL.md` + `references/openalex-fields.md` + `references/arxiv-syntax.md`；`zotero-write.md` 与 `export` 相关说明随 M5 追加。
 
