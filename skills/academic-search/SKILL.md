@@ -23,7 +23,7 @@ agent_created: true
 2. **每条结果都带出处**：`doi` / `arxiv_id` / `work_key`，另有 `sources[]` 说明该条由哪几条来源记录合成、各自扮演什么角色。
 3. **联网是可选的**：默认只在库内数据过期时才联网，也可以要求强制刷新或完全离线。
 
-**尚未实现的部分**：不接 Zotero，不调用任何 LLM，不下载 PDF；`textify` / `read` / `digest` / `export` 等子命令尚未接线（见 §7）。文中标「实测」的结论是实际运行验证过的，不是从上游文档推断的。
+**尚未实现的部分**：不接 Zotero，不调用任何 LLM；`download` / `read` / `digest` / `export` 等子命令尚未接线（见 §7）。文中标「实测」的结论是实际运行验证过的，不是从上游文档推断的。
 
 ## 1. 调用入口
 
@@ -70,7 +70,7 @@ agent_created: true
 | `verify` | 抽样重算 `bytes/` 的 sha256 | 可用 |
 | `version` | 版本与 `schema` 版本 | 可用 |
 | `sync` | 跑 `config/profile.toml` 里的具名查询 → 联网采集 → 落候选池 → 写报告 | 可用；参数与产物见 `references/cli-reference.md` §3 |
-| `textify` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 尚未实现 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。要新论文用 `search --refresh true` |
+| `download` / `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 尚未实现 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。要新论文用 `search --refresh true` |
 
 **注意**：按名字跑用 `sync`（`search` 只接受当场给的检索式）。两者**共用同一本账本**，判据是检索式字段而不是命令名——字段一致就是同一次检索，会命中同一条新鲜度记录、不重复联网；反过来，某条查询刚被一次字段等价的 `search` 刷过，`sync` 也会跳过它并在 `degraded` 里说明。
 
@@ -111,7 +111,7 @@ agent_created: true
 - **需要一个可用的 Python**（`>=3.11`，用到标准库 `tomllib`）。启动器找解释器的顺序：先看 `ACADEMIC_SEARCH_PYTHON`，没设则 Windows 依次试 `python`、`py`，POSIX 依次试 `python3`、`python`；Windows 版还会先探测解释器能不能执行 `import sys`，探测失败即退出码 1、**不产出 JSON 信封**（实测：`python` 命中应用商店存根时就是这样）。这属于环境问题、不是源失败，把 `ACADEMIC_SEARCH_PYTHON` 指到真解释器即可。
 - **OpenAlex 需要 API key**：匿名档的每日额度按出口 IP 共享、很容易耗尽（额度用尽时返回 429）。要用 OpenAlex，先把 key 放进环境变量 `OPENALEX_API_KEY`；只用 `--source arxiv` 则不需要任何凭据。
 - 结果里每条 `sources[].source` 说明该项来自哪个源、扮演什么角色（`preprint` / `primary` / `published`）。
-- 未接线：`textify` / `read` / `digest list|put` / `export` / `bundle`；`promote` / `graph` 同样尚未实现。
+- 未接线：`download` / `read` / `digest list|put` / `export` / `bundle`；`promote` / `graph` 同样尚未实现。
 
 ## 8. references（按需读，不要默认加载）
 

@@ -256,7 +256,7 @@ expires = "2026-12-31"
 | code | 含义 | 重试同一命令 | 若否，先做什么 |
 |---|---|---|---|
 | `busy` | 写锁被占用（另一个 run 在跑） | ✅ 稍后一次 | — |
-| `projection_missing` | `works/` 里没有这篇的正文 | ❌ | 先跑 `textify --work <work_key>` |
+| `projection_missing` | 本地没有这篇的正文，且此时不允许联网 | ❌ | 去掉 `--refresh false` 重跑，或先 `download --work <work_key>` |
 | `no_profile` | 没有 `config/profile.toml` | ❌ | 按 SKILL.md §4 创建 |
 | `profile_invalid` | 解析失败（附出错行） | ❌ | 修文件后重跑 `profile check` |
 | `invalid_args` | 参数不合法 | ❌ | 改参数 |
