@@ -31,6 +31,7 @@ SOURCE_ERROR = "source_error"
 NETWORK_ERROR = "network_error"
 RATE_LIMITED = "rate_limited"
 IO_ERROR = "io_error"
+DATA_NOT_WRITABLE = "data_not_writable"
 INTERNAL_ERROR = "internal_error"
 
 ERROR_CODES = frozenset(
@@ -45,6 +46,7 @@ ERROR_CODES = frozenset(
         NETWORK_ERROR,
         RATE_LIMITED,
         IO_ERROR,
+        DATA_NOT_WRITABLE,
         INTERNAL_ERROR,
     }
 )

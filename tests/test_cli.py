@@ -625,3 +625,65 @@ def test_in_body_never_goes_online_on_auto(root, monkeypatch):
     )
     assert outcome.network is False
     assert [item["work_key"] for item in outcome.items] == [BODY_KEY]
+
+
+def test_any_of_accepts_several_values_after_one_flag(root, capsys):
+    """`--any-of a b c` 是多数人的第一反应；不能退出码 2、把管道打成空文件。"""
+    code = cli.main([
+        "--root", str(root), "search",
+        "--any-of", "dreamer", "latent imagination", "planet",
+        "--refresh", "false",
+    ])
+    assert code == 0
+    env = envelope_of(capsys)
+    assert env["ok"] is True and env["data"]["items"] == []
+
+
+def test_counts_local_reports_the_funnel(root):
+    """counts.local 说明「候选看了多少、过滤后多少、返回多少」——ADR-0070。"""
+    key = _insert_work(root, "cccccccccccccccccccc", title="World Model Probe")
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["world model"]), refresh="false", sources=["arxiv"],
+    )
+    assert [item["work_key"] for item in outcome.items] == [key]
+    assert outcome.counts["local"] == {
+        "considered": 1, "matched": 1, "returned": 1,
+        "truncated": False, "venue_filtered_out": 0,
+    }
+
+
+def test_candidate_budget_truncates_and_says_so(root):
+    """预算用尽时必须标 truncated，而不是静默少回。"""
+    for i in range(3):
+        _insert_work(root, "budget%017d" % i, title="World Model %d" % i)
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["world model"]), refresh="false",
+        sources=["arxiv"], max_candidates=1,
+    )
+    local = outcome.counts["local"]
+    assert local["considered"] == 1
+    assert local["truncated"] is True
+
+
+def test_venue_filtered_out_is_counted(root):
+    """venue 白名单按载体判据 fail-closed；被它滤掉多少要能看出来。"""
+    _insert_work(root, "dddddddddddddddddddd", title="World Model Probe")
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["world model"], venues=["NeurIPS"]),
+        refresh="false", sources=["arxiv"],
+    )
+    assert outcome.items == []
+    assert outcome.counts["local"]["venue_filtered_out"] == 1
+
+
+def test_lookup_title_miss_never_claims_network(root, capsys):
+    """`--title` 从不联网；auto/false 的文案不能说成「联网未取到」。"""
+    for refresh in ("false", "auto"):
+        code = cli.main([
+            "--root", str(root), "lookup",
+            "--title", "no such paper", "--refresh", refresh,
+        ])
+        assert code == 1
+        message = envelope_of(capsys)["error"]["message"]
+        assert "不联网" in message
+        assert "联网未取到" not in message

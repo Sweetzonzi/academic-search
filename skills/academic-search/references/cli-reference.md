@@ -9,12 +9,12 @@
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--all-of 词` | — | 可重复；组内 **AND**（交集） |
-| `--any-of 词` | — | 可重复；组内 **OR**（并集） |
-| `--venue 名` | — | 可重复。写**载体名**（会议或期刊都行，如 `ICRA` / `NeurIPS` / `IEEE T-RO` / `JAAMAS`）；**全称与别名也认**（`IEEE Robotics and Automation Letters` = `RA-L`，大小写与连字符不敏感）。名字由 `src/academic_search/venues.toml` 解析成 OpenAlex source id；**解析不到就报错**（`invalid_args`），也可直写 `S…`。判据是「作品的载体 source id 集合 ∩ 名单 ≠ ∅」，**`venue` 字符串不参与判定**。给了白名单时 **arXiv 那一腿不参与**（arXiv 没有载体概念），它在 `counts.by_source` 里记 0 |
-| `--author 名` | — | 可重复 |
+| `--all-of 词` | — | 可重复，也可一次给多个值（`--all-of a b`）；组内 **AND**（交集） |
+| `--any-of 词` | — | 可重复，也可一次给多个值（`--any-of a b c`）；组内 **OR**（并集） |
+| `--venue 名` | — | 可重复，也可一次给多个值。写**载体名**（会议或期刊都行，如 `ICRA` / `NeurIPS` / `IEEE T-RO` / `JAAMAS`）；**全称与别名也认**（`IEEE Robotics and Automation Letters` = `RA-L`，大小写与连字符不敏感）。名字由 `src/academic_search/venues.toml` 解析成 OpenAlex source id；**解析不到就报错**（`invalid_args`），也可直写 `S…`。判据是「作品的载体 source id 集合 ∩ 名单 ≠ ∅」，**`venue` 字符串不参与判定**。给了白名单时 **arXiv 那一腿不参与**（arXiv 没有载体概念），它在 `counts.by_source` 里记 0。**它只匹配已入库记录，且只认 OpenAlex 的载体指派**——经典论文常常只有预印本记录、或上游没给正式载体（实测 Ha & Schmidhuber 2018 的 NeurIPS 版在 OpenAlex 里只有 arXiv 载体），所以「用 venue 找某会经典」会漏；见下面的坑 |
+| `--author 名` | — | 可重复，也可一次给多个值 |
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
-| `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，所以 `--limit 5` 之后池子里仍会多出 95 条 |
+| `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，本地再过候选预算与结构化过滤，所以 `--limit 5` 之后池子里仍可能多出很多条，而返回条数也可能**少于** `--limit`（过滤太挑或候选预算用尽）。看 `counts.local` 的 `considered/matched/returned/truncated` 解释这个差 |
 | `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
 | `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §6 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
@@ -63,7 +63,10 @@ scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limi
 - **不给检索式 = 列本地库全部**：空检索式跳过 FTS 过滤，返回本地所有 `live` work（条数受 `--limit` 限制）。**这一档只配 `--refresh false`**；配 `auto` / `true` 等于拿空检索式去联网。
 - **不要给空关键词**：`--all-of ""` 实测 `ok=false`、`error.code=internal_error`（FTS5 语法错误）。要列全部就别带这个词。
 - `--limit` 数的是 **work**，不是 record：一篇由 arXiv + OpenAlex 两条记录合成的只算 1。
-- **`--refresh false` 也会写一条 run 台账**（`refreshed=0`、`requests=0`、`counts={}`）；`lookup` 的离线命中不写。两者都不发网络请求。
+- **返回条数少于 `--limit` 时先看 `counts.local`**，不要凭感觉补：`considered` 是候选预算内看了多少 work、`matched` 是过滤后 `--limit` 前有多少、`truncated` 表示预算用尽（可能还有没看的匹配）、`venue_filtered_out` 是文本命中但载体被判据滤掉的 work 数。本地检索是**在全库上**过的，与本次远端取了多少条没有减法关系。
+- **`--venue` 只匹配已入库记录，且只认 OpenAlex 的载体指派**。经典论文常常只有预印本记录（`work_carriers` 里没有该会的 source id），于是被白名单 fail-closed 滤掉，`counts.local.venue_filtered_out` 会把它数出来。实测 Ha & Schmidhuber 2018 的 `World Models`：库里只有 arXiv 记录，OpenAlex 对应的 NeurIPS 版标题是 `Recurrent World Models Facilitate Policy Evolution`、且 `locations` 里**只有 arXiv**——`--venue NeurIPS` 查不到它不是本地漏采，是上游没有这个载体。→ 用 venue 找经典要叠加 `--sort citations`（默认按日期只取最新一页），并预期仍可能漏；漏了就改用主题词查。
+- **短词 + `--sort citations` 的噪声比长短语大得多。** `--any-of dreamer` 按被引降序的前 20 条里，头部是 EEG 情感识别的图网络（1601 引）与 `DREAMER` 数据集（1120 引），只有 `Dream to Control`（573 引）是本方向的。词越短、越常见，全局被引越容易把跨领域高被引拉上来。→ **短词要与领域词共现**（`--all-of "world model" --any-of dreamer`），或先锚定主题再加 `--min-citations`。**不要**以为「只匹配标题」能救：`DREAMER` 数据集就在标题里，而 `Dream to Control` 的标题没有 `dreamer`——实测 title-only 会滤掉唯一相关的那篇。
+- **`--refresh false` 也会写一条 run 台账**（`refreshed=0`、`requests=0`、台账的 `counts={}`）；`lookup` 的离线命中不写。两者都不发网络请求；信封里的 `counts.local` 与台账不是一回事。
 - **「被引高」不是「这个领域里重要」。** `--sort citations` 与 `--min-citations` 排/筛的都是**全局**被引，与主题只有「短语命中」这一层关系。**先分清两个档**：只给 `--min-citations` 时仍按默认的 `--sort date` 取数，回来的是「最新的、被引超过阈值的一批」（实测 8 条出版年落在 2019–2025）；**要经典必须再给 `--sort citations`**，那时才按被引降序取。实测 `"world model"` 按被引降序的头部是：1971 年的定理证明（被引 4 865）、1997 年的社会学论文（4 684）、2006 年的脑网络（2 591），**前五里只有两条**与「世界模型」有关（`docs/实验/EX-2026-10-16-检索口径与来源校验.md` §12(b)(c)）。短语命中还可能是分词的产物——`small-world models` 含子串 `world model`，`world modeling` 归并成同一词。→ 用这两个参数时**主题词要给具体**、取回后**逐条复核主题相关性**，并在回答里说明「这是按被引排的，不是按相关性排的」。
 
   ```powershell
@@ -94,7 +97,7 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 
 - **`lookup` 固定带完整摘要**（`abstract` 字段，不截断、不需开关）：它本来就是「看确定的这一篇」，体积不构成顾虑，而判断一篇值不值得读正好需要摘要。`search` 找到候选后转 `lookup` 读摘要，是推荐的动线。
 - **`true` 与 `auto` 的区别只在「本地已命中时刷不刷」**：`auto` 命中即返回（零请求），`true` 命中也要刷一次。刷新本身**免费**——单实体 GET 的计费头是 `x-ratelimit-cost-usd: 0`（实测），所以这条差别不构成成本差异，只构成「引用数是不是最新的」。要修「库里只有 arXiv 记录、被引是 `null`」这类残缺，就用 `true`。
-- `--title` 走 FTS5 **短语**匹配（标题 + 摘要），取第一条命中，**不是模糊排序**。拼不准就改用 `search`。
+- `--title` 走 FTS5 **短语**匹配（标题 + 摘要），取第一条命中，**不是模糊排序**，也**从不联网**（标题不是标识，单实体 GET 用不上）。拼不准就改用 `search`；`--refresh true/false/auto` 三档在 `--title` 上都不发请求。
 - 本地未命中且 `--refresh false` → `ok=false`、`error.code=not_found`（退出码 1）。换标识，或先 `search` 联网取。
 - `--doi` 入参会归一化，粘 `https://doi.org/...` 形式照样命中。
 
@@ -246,7 +249,7 @@ scripts/run.cmd sync --refresh false
 | `is_retracted` | 撤稿，不要推荐 |
 | `dup_suspect` | 疑似同一篇但**未合并**，引用时必须说明 |
 
-`data` 除 `items` 外：`network`（本次是否发过请求）、`cost`（`{usd, basis, requests}`）；**本次联网刷新过**时另有 `counts`。离线查库时不出现。
+`data` 除 `items` 外：`network`（本次是否发过请求）、`cost`（`{usd, basis, requests}`）；`counts`（`search` 恒有，`lookup` 只在刷新时）——`counts.local` 是本地漏斗 `{considered, matched, returned, truncated, venue_filtered_out}`，用来解释「为什么返回条数少于 `--limit`」；本次联网刷新过时另有 `new_candidates` / `dedup_blocked` / `by_source` / `failures`。
 
 **摘要按需出现，不是每次都有**：`lookup` 固定带**完整**摘要；`search` 要打开 `--abstract` 才带，且是截断到 `abstract.chars` 的片段；不开时条目里**没有这个键**（不是 `null`），解析时按可缺席处理。
 
@@ -311,6 +314,7 @@ expires = "2026-12-31"
 | `network_error` | 网络不可达 | ✅ | — |
 | `rate_limited` | 429 或余额耗尽且无法降级 | ✅ 稍后 | — |
 | `io_error` | 本地读写失败 | ❌ | 排查路径与权限 |
+| `data_not_writable` | 数据目录不可写（只读挂载 / 权限不足）；**连 `--refresh false` 都打不开库** | ❌ | 把仓库放到可写位置，或把 `ACADEMIC_SEARCH_ROOT` 指到可写目录；`version` / `profile` 不碰库，会照常成功，**别拿它们当环境自检** |
 | `internal_error` | 未分类缺陷 | ❌ | 报缺陷 |
 
 可重试的**只重试一次**。`source_error` / `network_error` / `rate_limited` 在**仍产出结果**时不走本表，只记进 `counts.failures[]` / `degraded`。

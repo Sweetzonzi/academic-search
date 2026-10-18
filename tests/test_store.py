@@ -210,3 +210,51 @@ def test_migration_adds_fulltext_version_columns_to_a_v3_database(tmp_path):
     finally:
         conn.close()
 
+
+def test_connect_reports_data_not_writable(tmp_path):
+    """数据目录建不出来时给 data_not_writable，而不是 SQLite 的 internal_error。"""
+    blocker = tmp_path / "blocked"
+    blocker.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(envelope.EnvelopeError) as excinfo:
+        store.connect(blocker / "sidecar.db")
+    assert excinfo.value.code == envelope.DATA_NOT_WRITABLE
+    assert str(blocker) in excinfo.value.message
+
+
+def test_connect_reports_readonly_sidecar(tmp_path):
+    """目录可写、库文件只读：同样要报 data_not_writable，并指向那个文件。"""
+    import os
+
+    path = tmp_path / "data" / "sidecar.db"
+    store.connect(path).close()
+    os.chmod(path, 0o444)
+    if os.access(path, os.W_OK):
+        pytest.skip("当前用户对只读文件仍有写权限（如 root），这条用例不适用")
+    try:
+        with pytest.raises(envelope.EnvelopeError) as excinfo:
+            store.connect(path)
+        assert excinfo.value.code == envelope.DATA_NOT_WRITABLE
+        assert str(path) in excinfo.value.message
+    finally:
+        os.chmod(path, 0o666)
+
+
+def test_search_fts_applies_filters_before_the_limit(conn):
+    """结构化过滤必须在 LIMIT 之前生效，否则预算会被无关记录吃掉（ADR-0070）。"""
+    with store.write_tx(conn):
+        store.insert_record(conn, {
+            "record_uid": "r1", "source": "openalex", "source_id": "w1",
+            "title": "alpha alpha alpha", "abstract": "",
+        })
+        store.insert_record(conn, {
+            "record_uid": "r2", "source": "arxiv", "source_id": "a1",
+            "title": "alpha", "abstract": "",
+        })
+    # 相关性上 r1 明显更高：不带过滤时第一条就是它
+    assert store.search_fts(conn, '"alpha"', 1) == ["r1"]
+    # 过滤进同一条 SQL 后，预算先给 arxiv，r2 不再被 r1 挤掉
+    assert store.search_fts(
+        conn, '"alpha"', 1, where=("r.source = ?",), params=("arxiv",)
+    ) == ["r2"]
+    assert len(store.search_fts(conn, '"alpha"', -1)) == 2
+

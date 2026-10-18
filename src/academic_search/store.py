@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -49,21 +50,71 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+#: SQLite 在「目录不可写」与「库文件只读」两种情况下抛的原文；只映射这两种
+#: （其它 OperationalError 仍按未分类缺陷处理，不掩盖真故障）。
+_WRITE_BLOCKED_MESSAGES = ("unable to open database file", "readonly database")
+
+
+def _not_writable(path: Path, reason: str) -> envelope.EnvelopeError:
+    return envelope.EnvelopeError(
+        envelope.DATA_NOT_WRITABLE,
+        "数据目录不可写：" + str(path) + "（" + reason + "）；"
+        "请把仓库放到可写位置，或把 ACADEMIC_SEARCH_ROOT 指到可写目录",
+    )
+
+
+def _probe_writable(directory: Path) -> None:
+    """数据目录写探针（ADR-0069）。
+
+    sidecar 用 WAL，凡是能读的库也要能建 `-wal` / `-shm`，所以「库文件可读」
+    不等于「命令可用」；这里在连库之前先把结论问清楚。
+    """
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = directory / (".write-probe-" + os.urandom(6).hex())
+        probe.write_bytes(b"")
+        probe.unlink()
+    except OSError as exc:
+        raise _not_writable(directory, exc.strerror or str(exc)) from exc
+
+
 def connect(db_path: str | Path, *, create: bool = True) -> sqlite3.Connection:
     """打开（必要时创建）sidecar。
 
     写事务由 write_tx 用 BEGIN IMMEDIATE 显式管理，故连接处于 autocommit；
     busy_timeout=0 让拿不到锁立即失败（ADR-0055 要求不排队）。
+    数据目录不可写时先报 `data_not_writable`，不让 SQLite 的
+    `unable to open database file` 落到 `internal_error`（ADR-0069）。
     """
     path = Path(db_path)
+    _probe_writable(path.parent)
     if create:
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 0")
-    ensure_schema(conn)
+    if path.exists() and not os.access(path, os.W_OK):
+        raise envelope.EnvelopeError(
+            envelope.DATA_NOT_WRITABLE,
+            "sidecar 是只读文件：" + str(path)
+            + "；去掉只读属性，或把 ACADEMIC_SEARCH_ROOT 指到可写目录",
+        )
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(str(path), isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 0")
+        ensure_schema(conn)
+    except sqlite3.OperationalError as exc:
+        if conn is not None:
+            conn.close()
+        message = str(exc).lower()
+        if any(marker in message for marker in _WRITE_BLOCKED_MESSAGES):
+            raise _not_writable(path.parent, str(exc)) from exc
+        raise
+    except BaseException:
+        if conn is not None:
+            conn.close()
+        raise
     return conn
 
 
@@ -116,8 +167,14 @@ def write_tx(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     try:
         conn.execute("BEGIN IMMEDIATE")
     except sqlite3.OperationalError as exc:
-        if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+        message = str(exc).lower()
+        if "locked" in message or "busy" in message:
             raise envelope.EnvelopeError(envelope.BUSY, "写锁被占用，另一个 run 正在运行") from exc
+        if "readonly" in message:
+            raise envelope.EnvelopeError(
+                envelope.DATA_NOT_WRITABLE,
+                "sidecar 只读或不可写（" + str(exc) + "）；检查数据目录权限与文件只读属性",
+            ) from exc
         raise
     try:
         yield conn
@@ -378,17 +435,28 @@ def idents_of(conn: sqlite3.Connection, record_uid: str) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def search_fts(conn: sqlite3.Connection, query: str, limit: int) -> list[str]:
-    """FTS5 查询，返回命中的 record_uid（按 bm25 排序）。"""
-    rows = conn.execute(
-        """
-        SELECT record_uid FROM record_fts
-         WHERE record_fts MATCH ?
-         ORDER BY bm25(record_fts)
-         LIMIT ?
-        """,
-        (query, limit),
-    ).fetchall()
+def search_fts(
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int,
+    *,
+    where: Sequence[str] = (),
+    params: Sequence = (),
+) -> list[str]:
+    """FTS5 查询，返回命中的 record_uid（按 bm25 排序）。
+
+    `where` 里的子句在**同一条 SQL** 里、`LIMIT` 之前生效（ADR-0070）：检索预算
+    应该被已经过 `status` / `--source` / 日期窗过滤的记录占用，而不是先被
+    无关记录吃掉再丢。`limit` 传 `-1` = 不限。
+    """
+    clauses = ["record_fts MATCH ?"] + list(where)
+    sql = (
+        "SELECT record_fts.record_uid FROM record_fts "
+        "JOIN record r ON r.record_uid = record_fts.record_uid "
+        "WHERE " + " AND ".join(clauses) + " "
+        "ORDER BY bm25(record_fts) LIMIT ?"
+    )
+    rows = conn.execute(sql, [query] + list(params) + [limit]).fetchall()
     return [r["record_uid"] for r in rows]
 
 

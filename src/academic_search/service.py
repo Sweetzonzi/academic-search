@@ -206,12 +206,18 @@ def _author_ok(item: dict, authors: Iterable[str]) -> bool:
 def local_work_keys(
     conn, spec: SearchSpec, *, sources: Iterable[str], from_date: str | None,
     to_date: str | None, in_scope: str, root,
+    max_candidates: int = config.DEFAULT_LOCAL_MAX_CANDIDATES,
+    stats: dict | None = None,
 ) -> list[str]:
     """`--in` 三档的候选集：`meta` 只走 FTS5、`body` 只扫 `works/`、`both` 取并集。
 
     三档是**两个数据源的三档开关**，不是同一档的宽窄（ADR-0036 决策 2）；两路都过
     同一套非文本过滤（`status` / `--source` / 日期窗），逐 work 去重后再交给
     `_sorted_items` 判 venue / 作者 / 阈值 / 撤稿。没有检索式时三档同义：列出本地库。
+
+    `max_candidates` 是**候选预算**（ADR-0070）：FTS 命中的记录先过结构化过滤，
+    再按 bm25 取前 N 条；`0` 或负数 = 不限。预算用尽时 `stats["truncated"] = True`
+    ——这是「可能还有匹配没看到」，不是「结果就这么多」。
     """
     where = ["r.status = 'live'"]
     params: list = []
@@ -236,30 +242,64 @@ def local_work_keys(
         )
         return [row["work_key"] for row in conn.execute(sql, list(seed_params) + params)]
 
+    def works_of(records: Sequence[str]) -> list[str]:
+        """记录 → work_key（记录已过结构化过滤，这里只做映射）。"""
+        found: list[str] = []
+        for start in range(0, len(records), 400):
+            chunk = records[start:start + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            found.extend(
+                row["work_key"]
+                for row in conn.execute(
+                    "SELECT DISTINCT wm.work_key FROM work_member wm "
+                    "WHERE wm.record_uid IN (" + placeholders + ") ORDER BY wm.work_key",
+                    chunk,
+                )
+            )
+        return found
+
+    def finish(keys: list[str], *, truncated: bool = False) -> list[str]:
+        unique = list(dict.fromkeys(keys))  # 并集保序去重
+        if stats is not None:
+            stats["considered"] = len(unique)
+            stats["truncated"] = truncated
+        return unique
+
     if not (spec.all_of or spec.any_of):
-        return scoped(None)  # 裸 search：列本地库，与 --in 无关
+        return finish(scoped(None))  # 裸 search：列本地库，与 --in 无关
     keys: list[str] = []
+    truncated = False
     if in_scope in ("meta", "both"):
-        rids = store.search_fts(conn, _fts_query(spec), 500)
+        budget = int(max_candidates or 0)
+        ask = budget + 1 if budget > 0 else -1
+        rids = store.search_fts(
+            conn, _fts_query(spec), ask, where=tuple(where), params=tuple(params)
+        )
+        if budget > 0 and len(rids) > budget:
+            rids = rids[:budget]
+            truncated = True
         if rids:
-            keys.extend(scoped("r.record_uid IN (" + ",".join("?" for _ in rids) + ")", rids))
+            keys.extend(works_of(rids))
     if in_scope in ("body", "both"):
         seeds = _body_work_keys(conn, root, spec)
         if seeds:
             keys.extend(scoped("wm.work_key IN (" + ",".join("?" for _ in seeds) + ")", seeds))
-    return list(dict.fromkeys(keys))  # 并集保序去重
+    return finish(keys, truncated=truncated)
 
 
 def _sorted_items(
-    conn, keys, *, spec: SearchSpec, blocked_venues, venue_ids, sort: str, limit: int
+    conn, keys, *, spec: SearchSpec, blocked_venues, venue_ids, sort: str, limit: int,
+    stats: dict | None = None,
 ) -> list[dict]:
     items = []
+    venue_filtered_out = 0
     for key in keys:
         if group.work_is_excluded(conn, key, blocked_venues):
             continue
         # 白名单与黑名单同一条判据：载体 source id 集合 ∩ 名单（ADR-0060 决策 1）。
         # 载体集合为空即不通过——fail-open 会让阈值与名单一起失去意义。
         if venue_ids and not venues.hits(group.work_carriers(conn, key), venue_ids):
+            venue_filtered_out += 1
             continue
         item = store.aggregate_work(conn, key)
         if item is None or item["is_retracted"]:
@@ -285,6 +325,9 @@ def _sorted_items(
         )
         undated = [i for i in items if not i["published_at"]]
         items = dated + undated
+    if stats is not None:
+        stats["matched"] = len(items)
+        stats["venue_filtered_out"] = venue_filtered_out
     return items[:limit]
 
 
@@ -492,6 +535,7 @@ def run_search(
     venue_blacklist: Iterable[str] = (),
     abstract: bool = False,
     abstract_chars: int = config.DEFAULT_ABSTRACT_CHARS,
+    max_candidates: int = config.DEFAULT_LOCAL_MAX_CANDIDATES,
     client=None,
     today=None,
 ) -> Outcome:
@@ -536,16 +580,29 @@ def run_search(
             counts=collected["counts"],
             run_id=collected["run_id"],
         )
+        local_stats: dict = {}
         keys = local_work_keys(
             conn, spec, sources=sources, from_date=from_date, to_date=to_date,
-            in_scope=in_scope, root=root,
+            in_scope=in_scope, root=root, max_candidates=max_candidates,
+            stats=local_stats,
         )
         outcome.items = _shape_abstracts(
             _sorted_items(conn, keys, spec=spec, blocked_venues=blocked_venues,
-                          venue_ids=venue_ids, sort=sort, limit=limit),
+                          venue_ids=venue_ids, sort=sort, limit=limit, stats=local_stats),
             include=abstract,
             chars=abstract_chars,
         )
+        # 本地阶段的账放进同一个 counts（ADR-0070）：离线和联网都能看到
+        # 「候选看了多少、过滤后多少、为什么变少」，不再只报远端取了多少条。
+        counts = dict(outcome.counts or {})
+        counts["local"] = {
+            "considered": local_stats.get("considered", 0),
+            "matched": local_stats.get("matched", 0),
+            "returned": len(outcome.items),
+            "truncated": bool(local_stats.get("truncated", False)),
+            "venue_filtered_out": local_stats.get("venue_filtered_out", 0),
+        }
+        outcome.counts = counts
         return outcome
     finally:
         conn.close()
@@ -830,10 +887,16 @@ def run_lookup(
             if item and not item["is_retracted"]:
                 outcome.items = [item]
         if not outcome.items and work_key is None:
-            if ident is None and refresh == "true":
+            if ident is None:
+                if refresh == "true":
+                    raise envelope.EnvelopeError(
+                        envelope.NOT_FOUND,
+                        "标题未命中本地；`--title` 不联网（标题不是标识），要刷新请改用 --doi / --arxiv",
+                    )
                 raise envelope.EnvelopeError(
                     envelope.NOT_FOUND,
-                    "标题未命中本地；`--title` 不联网（标题不是标识），要刷新请改用 --doi / --arxiv",
+                    "标题未命中本地；`--title` 只做标题+摘要的短语匹配、从不联网，"
+                    "换更准的写法或改用 --doi / --arxiv",
                 )
             raise envelope.EnvelopeError(envelope.NOT_FOUND, "标识未命中，且联网未取到")
         return outcome

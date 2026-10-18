@@ -48,6 +48,7 @@ def test_error_codes_match_contract():
         "network_error",
         "rate_limited",
         "io_error",
+        "data_not_writable",
         "internal_error",
     }
 

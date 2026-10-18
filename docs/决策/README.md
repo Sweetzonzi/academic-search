@@ -94,4 +94,6 @@ title: "设计决策索引"
 | [ADR-0066](ADR-0066.md) | `sync` 的运行粒度与产物形状 | 一条具名查询 = 一行 `run`（不改表）；`run.json` 收敛为单数并装「新发表 / 新发现」两栏；stdout 逐 run 自包含、不设调用级合计；报告每条 run 一份、`latest-report.md` 为调用汇总；另定刷新档位、查询解析、窗口与首次执行、响应留档与额度阈值；删「水位」术语与 `last_success_watermark` 列 | accepted |
 | [ADR-0068](ADR-0068.md) | `works/` 目录名改为可读 | 投影目录名 = `<年>-<首作者>-<标题>-<work_key>`，**尾段恒为 20 位 `work_key`**（唯一可反解的身份段）；`download` / `read` 写盘前对账改名、合并后的空壳目录清掉；`bytes/` 仍是哈希 | accepted |
 | [ADR-0067](ADR-0067.md) | 全文入口按产物拆分 | `download` 取原始字节、`read` 懒物化文本，取消 `textify` 命令；`record.source_version` 随元数据刷新写入（为空时 `download` 补一次），缓存判据 = 版本相等；`artifact` 增版本与 HTTP 验证器列，`artifact.kind` 增 `source_html`/`source_pdf` | accepted |
+| [ADR-0069](ADR-0069.md) | 数据目录不可写先报 `data_not_writable` | 连库前在 `data/` 做写探针；SQLite 的 `unable to open database file` / `readonly database` 映射到同一错误码并带路径与修法；只读根不支持「可读不可写」降级 | accepted |
+| [ADR-0070](ADR-0070.md) | 本地候选预算与 `counts.local` | 硬编码 500 换成 `[local] max_candidates`（默认 5000，0=不限）；`status`/`--source`/日期窗下推到 FTS 的 `LIMIT` 之前；`counts.local` 恒带 `considered/matched/returned/truncated/venue_filtered_out` | accepted |
 

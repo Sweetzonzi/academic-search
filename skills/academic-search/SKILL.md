@@ -45,7 +45,7 @@ agent_created: true
 | 某个方向的最新进展 | `sync`（按 `config/profile.toml` 里的具名查询跑，产出报告文件）；一次性的临时检索用 `search --refresh true` |
 | 某个方向**最新**的高被引论文 | `search --min-citations N`（或 `--min-fwci X` 跨领域比）。这两个是**取数条件**，会多花一次请求，默认按日期取数，所以带回的是「最新的、被引超过阈值的一批」 |
 | 某个方向的**经典**（全局被引头部） | 在上面基础上再加 `--sort citations`。它排的是**全局**被引、不是相关性，头部会有跨领域命中，必须逐条复核主题（§6 第 6 条） |
-| **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给名字（会议与期刊都可以，如 `IEEE T-RO` / `JAAMAS` / `AAMAS`）；清单在 `src/academic_search/venues.toml`（16 条），**解析不到会报错**。给了它会跳过 arXiv 腿 |
+| **只在某个会议 / 期刊上**找 | `search --venue ICRA` 这样给名字（会议与期刊都可以，如 `IEEE T-RO` / `JAAMAS` / `AAMAS`）；清单在 `src/academic_search/venues.toml`（16 条），**解析不到会报错**。给了它会跳过 arXiv 腿。**它只匹配已入库记录、只认 OpenAlex 的载体指派**：经典论文常只有预印本记录，会被滤掉（`counts.local.venue_filtered_out` 会数出来）；要经典还要叠加 `--sort citations`，见 `references/cli-reference.md` §1 的坑 |
 | 要把某篇的**原文**拿到本地（PDF / LaTeX 源码 / arXiv HTML） | `download --work <work_key> --source auto\|pdf\|all`，见 §3 |
 | `config/profile.toml` 能不能用 | `profile check` |
 
@@ -93,12 +93,14 @@ agent_created: true
 - `data.items[].abstract`：**按需出现**——`lookup` 固定带完整摘要；`search` 只有开了 `--abstract` 才带截断版（长度走 `config/search.toml`）。要引用摘要原文或照它翻译前，先读 `references/cli-reference.md` §1 与 §8：**它可能来自预印本稿，或者是 OpenAlex 倒排索引的还原产物**，载荷不带标记。
 - `data.network`：本次有没有发过请求；`data.cost`：`{usd, basis, requests}`（`basis` 是计费口径）。
 - `data.counts.failures[]`：部分源失败。**部分失败不算失败**：`ok` 仍为 true、退出码 0，如实汇报哪个源没成。
+- `search` 的 `data.counts.local`：本地漏斗 `{considered, matched, returned, truncated, venue_filtered_out}`。返回条数少于 `--limit`、或带 `--venue` 时结果很少，先看它——`truncated` 是候选预算用尽（可能还有没看的匹配），`venue_filtered_out` 是文本命中但载体不含白名单的条数。
 - `data.degraded.reason`：本次降级了（余额不足只查本地、新鲜度跳过联网、或 `--title` 配 `--refresh true` 时只能查本地）。**降级不是错误，不要重试。**
 - **`sync` 的信封不一样**：`data.runs[]` 逐 run 自包含（没有调用级 `counts` / `cost` 合计），而且**不返回结果清单**——清单在 `data/runs/<run_id>/run.json` 里，人读同目录的 `report.md` 与 `data/latest-report.md`。要点见 `references/cli-reference.md` §4。
 - `data.items[].dup_suspect = true`：疑似同一篇但**未合并**，引用时必须说明。
 - `data.items[].is_retracted = true`：撤稿，不要推荐。
 - **退出码**：`0` = 有产出，`1` = 没有产出（细分看 `error.code`）。**参数写错是例外**：argparse 直接退出，退出码 2、stderr 打 usage、没有 JSON 信封——别把「非 0 就一定有信封」当前提。
 - `ok=false` 时看 `error.code`：可重试的只有 `busy` / `source_error` / `network_error` / `rate_limited`，且**只重试一次**；其余按 `error.message` 修（完整错误码表见 `references/cli-reference.md` §10）。
+- `error.code=data_not_writable`：数据目录不可写，**换目录或改 `ACADEMIC_SEARCH_ROOT`**，重试无用。`version` / `profile` 不碰库会照常成功，所以它们通过**不代表**能检索——环境自检以一次 `search --refresh false` 为准。
 
 ## 6. 硬规则
 
@@ -108,10 +110,12 @@ agent_created: true
 4. **不要直接改 `data/`**：落库由命令负责。
 5. **本版本不接 Zotero**。
 6. **「经典」不等于「被引高」**：`--min-citations` 与 `--sort citations` 排的是**全局**被引，头部会出现跨领域命中，也可能是分词造成的假命中（`small-world models` 含子串 `world model`）。给用户「这个方向的经典」前必须**逐条复核主题相关性**，并说明这批是按被引排的、不是按相关性排的；`--min-fwci` 还会整批排除没有 `fwci` 的最新论文。细则见 `references/cli-reference.md` §1。
+7. **短词（`dreamer` / `planet` / `world`）要配领域词**：短词 + `--sort citations` 的头部是跨领域高被引（实测 `dreamer` 的前两条是 EEG 数据集与情感识别网络），单用 `--min-citations` 也一样。给短词时加一条 `--all-of` 收窄，或换成多词短语。**不要**用「只匹配标题」当解药：同名词照样在标题里，而真正相关的那篇标题反而没有它。
 
 ## 7. 环境要求与未接线
 
-- **需要一个可用的 Python**（`>=3.11`，用到标准库 `tomllib`）。启动器找解释器的顺序：先看 `ACADEMIC_SEARCH_PYTHON`，没设则 Windows 依次试 `python`、`py`，POSIX 依次试 `python3`、`python`；Windows 版还会先探测解释器能不能执行 `import sys`，探测失败即退出码 1、**不产出 JSON 信封**（实测：`python` 命中应用商店存根时就是这样）。这属于环境问题、不是源失败，把 `ACADEMIC_SEARCH_PYTHON` 指到真解释器即可。
+- **需要一个可用的 Python**（`>=3.11`，用到标准库 `tomllib`）。启动器按候选顺序找解释器并**逐个探测**：先看 `ACADEMIC_SEARCH_PYTHON`，不可用则回退；Windows 再试 `python`、`py`，POSIX 再试 `python3`、`python`。探测方式是执行 `import sys`，失败就换下一个；**同一个名字在 PATH 里有多个命中时会逐个试**（应用商店的 `python.exe` 存根常排在真解释器前面）。全部失败才退出码 1、**不产出 JSON 信封**。这属于环境问题、不是源失败。
+- **仓库根必须可写**：`data/`、`bytes/`、`works/` 都要能写。sidecar 用 WAL，**读也要建 `-wal` / `-shm`**，所以只读挂载上连 `search --refresh false` 都会报 `data_not_writable`（不是只有刷新会失败）。修法：把仓库放到可写位置，或把 `ACADEMIC_SEARCH_ROOT` 指到可写目录。`version` / `profile` 不碰库，会照常成功，**不能当环境自检**——自检用一次 `search --refresh false`。
 - **OpenAlex 需要 API key**：匿名档的每日额度按出口 IP 共享、很容易耗尽（额度用尽时返回 429）。要用 OpenAlex，先把 key 放进环境变量 `OPENALEX_API_KEY`；只用 `--source arxiv` 则不需要任何凭据。
 - **转换链需要一个 pandoc**：把 LaTeX 源码或 arXiv HTML 转成 Markdown（唯一消费者 `read` 尚未接线，见本节末）。可执行文件单件约 220 MB（官方压缩包约 40 MB），**不进版本库**，故按下面顺序找：环境变量 `ACADEMIC_SEARCH_PANDOC`（指向可执行文件本身）→ 仓库根的 `vendor/pandoc/pandoc.exe`（POSIX 上是 `pandoc`）→ `PATH`。装法：从官方下载页 `https://github.com/jgm/pandoc/releases/latest` 取 `pandoc-<版本>-windows-x86_64.zip` 或 `pandoc-<版本>-linux-amd64.tar.gz`（静态链接，解出即用），把可执行文件放进 `vendor/pandoc/`；或用包管理器（`winget install --source winget --exact --id JohnMacFarlane.Pandoc`、`choco install pandoc`、`brew install pandoc`）。**换 pandoc 版本会让已转好的正文按过期处理**，要重转一次；缺它时报 `source_error`、不产出正文。
 - 结果里每条 `sources[].source` 说明该项来自哪个源、扮演什么角色（`preprint` / `primary` / `published`）。

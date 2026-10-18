@@ -36,6 +36,9 @@ DEFAULT_SOURCE_ENABLED = {
 DEFAULT_MAX_AGE_HOURS = 24
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_ABSTRACT_CHARS = 800
+#: 本地 FTS 的候选预算（ADR-0070）：按 bm25 取前 N 条记录，再交给结构化过滤。
+#: 0 或负数 = 不限。500 的旧硬编码实测会丢掉近一半带 venue 的命中。
+DEFAULT_LOCAL_MAX_CANDIDATES = 5000
 DEFAULT_MIN_GRADE = "B"
 DEFAULT_SINCE_YEARS = 3
 #: 剩余额度低于它就停止联网（ADR-0066 决策 11）。依据：实测约 $0.001 / 次检索。
@@ -116,6 +119,7 @@ class SearchConfig:
     venue_blacklist: list[str] = field(default_factory=list)
     mailto: str | None = None
     min_remaining_usd: float = DEFAULT_MIN_REMAINING_USD
+    local_max_candidates: int = DEFAULT_LOCAL_MAX_CANDIDATES
 
 
 def config_dir(root: str | Path) -> Path:
@@ -268,6 +272,7 @@ def load_search(root: str | Path) -> SearchConfig:
         abstract = raw.get("abstract") or {}
         contact = raw.get("contact") or {}
         quota = raw.get("quota") or {}
+        local = raw.get("local") or {}
         if isinstance(contact, dict) and contact.get("mailto"):
             cfg.mailto = str(contact["mailto"]).strip() or None
         if isinstance(refresh, dict) and "max_age_hours" in refresh:
@@ -283,6 +288,8 @@ def load_search(root: str | Path) -> SearchConfig:
                 cfg.venue_blacklist = _str_list(quality["venue_blacklist"])
         if isinstance(quota, dict) and "min_remaining_usd" in quota:
             cfg.min_remaining_usd = float(quota["min_remaining_usd"])
+        if isinstance(local, dict) and "max_candidates" in local:
+            cfg.local_max_candidates = int(local["max_candidates"])
     return cfg
 
 

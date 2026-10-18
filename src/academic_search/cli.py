@@ -31,10 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     search = sub.add_parser("search", help="当场给的检索式 → 刷新（可选）→ 查库 → 结果列表")
-    search.add_argument("--all-of", action="append", default=[], metavar="词")
-    search.add_argument("--any-of", action="append", default=[], metavar="词")
-    search.add_argument("--venue", action="append", default=[], metavar="名")
-    search.add_argument("--author", action="append", default=[], metavar="名")
+    search.add_argument("--all-of", action="extend", nargs="+", default=[], metavar="词")
+    search.add_argument("--any-of", action="extend", nargs="+", default=[], metavar="词")
+    search.add_argument("--venue", action="extend", nargs="+", default=[], metavar="名")
+    search.add_argument("--author", action="extend", nargs="+", default=[], metavar="名")
     search.add_argument("--since-years", type=int, default=None)
     search.add_argument("--limit", type=int, default=20)
     search.add_argument("--source", action="append", default=[], metavar="源")
@@ -112,6 +112,7 @@ def _dispatch(args, name: str):
             max_age_hours=int(args.max_age) if args.max_age else cfg.max_age_hours,
             sort=args.sort, in_scope=args.in_scope, venue_blacklist=cfg.venue_blacklist,
             abstract=args.abstract, abstract_chars=cfg.abstract_chars,
+            max_candidates=cfg.local_max_candidates,
         )
         return outcome.payload(), 0
 
