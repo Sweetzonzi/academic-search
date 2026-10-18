@@ -43,8 +43,12 @@ def works_dir(root: str | Path) -> Path:
     return Path(root) / "works"
 
 
-def work_dir(root: str | Path, work_key: str) -> Path:
-    return works_dir(root) / work_key
+def work_dir(root: str | Path, projection: str) -> Path:
+    """`works/<proj>`：投影目录名由 `store.projection_name()` 算出（ADR-0068）。
+
+    这里只拼一层——**名字不是 `work_key`**，可读段随元数据变、尾段才是身份。
+    """
+    return works_dir(root) / projection
 
 
 def _chmod_readonly(path: Path) -> None:
@@ -96,6 +100,21 @@ def store_file(root: str | Path, src: str | Path, *, readonly: bool = True) -> s
     if readonly:
         _chmod_readonly(dest)
     return digest
+
+
+def remove_tree(path: str | Path) -> None:
+    """删掉一棵投影目录：Windows 上只读文件删不掉，逐个去只读（ADR-0068 决策 6）。
+
+    `bytes/` 的实体是只读的，投影是它的硬链接——删投影只动链接，不动实体。
+    """
+    base = Path(path)
+    if not base.exists():
+        return
+    for dirpath, _dirnames, filenames in os.walk(base, topdown=False):
+        for name in filenames:
+            make_writable(Path(dirpath) / name)
+        make_writable(Path(dirpath))
+    shutil.rmtree(base, ignore_errors=True)
 
 
 def hardlink_or_copy(src: str | Path, dest: str | Path) -> bool:

@@ -72,7 +72,7 @@ agent_created: true
 | `verify` | 抽样重算 `bytes/` 的 sha256 | 可用 |
 | `version` | 版本与 `schema` 版本 | 可用 |
 | `sync` | 跑 `config/profile.toml` 里的具名查询 → 联网采集 → 落候选池 → 写报告 | 可用；参数与产物见 `references/cli-reference.md` §4 |
-| `download` | 取原始字节（LaTeX 源码包 / arXiv HTML / PDF）→ `bytes/` + `works/<work_key>/source.*` | 可用；参数与载荷见 `references/cli-reference.md` §3 |
+| `download` | 取原始字节（LaTeX 源码包 / arXiv HTML / PDF）→ `bytes/` + `works/<proj>/source.*` | 可用；参数与载荷见 `references/cli-reference.md` §3 |
 | `read` / `digest list\|put` / `export` / `bundle` / `promote` / `graph` | 尚未实现 | **未接线**：argparse 不认识这些子命令（退出码 2、无信封）。要新论文用 `search --refresh true`；要原件用 `download` |
 
 **注意**：按名字跑用 `sync`（`search` 只接受当场给的检索式）。两者**共用同一本账本**，判据是检索式字段而不是命令名——字段一致就是同一次检索，会命中同一条新鲜度记录、不重复联网；反过来，某条查询刚被一次字段等价的 `search` 刷过，`sync` 也会跳过它并在 `degraded` 里说明。

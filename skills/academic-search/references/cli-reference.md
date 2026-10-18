@@ -110,7 +110,9 @@ scripts/run.cmd lookup --title "Skytopia Monocular Drone Navigation" --refresh f
 | `--source auto\|latex\|html\|pdf\|all` | `auto` | `auto` = LaTeX 源码优先、没有就回退 arXiv HTML（一次拿到一份能用的原件）；`latex` / `html` 指定即**不回退**；`pdf` 只在显式写 `pdf` 或 `all` 时下载，**只下载不解析**；`all` = 三条都取 |
 | `--refresh auto\|true\|false` | `auto` | `auto` = 本地已有**同一版本**就零请求复用；`true` = 无视版本重取（arXiv 没变会回 **304**，不重下字节）；`false` = 绝不联网 |
 
-**落到哪**：原件进内容寻址的 `bytes/`（只存一份，同名实体复用），并在 `works/<work_key>/` 建一份投影：`source.tar.gz` / `source.html` / `source.pdf`。投影是硬链接，删掉重跑一次就回来——**不要把这些路径存下来**。
+**落到哪**：原件进内容寻址的 `bytes/`（只存一份，同名实体复用），并在 `works/<proj>/` 建一份投影：`source.tar.gz` / `source.html` / `source.pdf`。投影是硬链接，删掉重跑一次就回来。
+
+目录名是 `<年>-<首作者>-<标题>-<work_key>`：**尾段 20 位才是身份**，前几段随元数据变（改标题就会改名）。所以要用路径就用载荷里的 `work_path`（它永远指向当前目录），别把抄下来的路径当标识（`docs/决策/ADR-0068.md`）。
 
 **信封**（`data`）：`{work_key, record_uid, arxiv_id, artifacts[], network, cost}`。`artifacts[]` **逐取件路线一行**：
 

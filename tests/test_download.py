@@ -118,9 +118,10 @@ def test_download_auto_fetches_then_reuses(root):
     entity = paths.byte_path(root, sha)
     assert entity.is_file() and entity.read_bytes() == BLOB
 
-    projected = paths.work_dir(root, "wk1") / "source.tar.gz"
+    projected = root / "works" / "2026-T-wk1" / "source.tar.gz"
     assert projected.is_file()
     assert os.stat(projected).st_ino == os.stat(entity).st_ino  # 投影是硬链接
+    assert entry["work_path"] == str(projected)  # 载荷返回当前目录（ADR-0068 决策 8）
 
     second = service.run_download(root, "wk1", client=client)
     assert second.network is False
@@ -135,7 +136,7 @@ def test_download_rebuilds_a_deleted_projection_without_the_network(root):
     client = StubClient({EPRINT + "v3": route(BLOB)})
     service.run_download(root, "wk1", client=client)
 
-    projected = paths.work_dir(root, "wk1") / "source.tar.gz"
+    projected = root / "works" / "2026-T-wk1" / "source.tar.gz"
     paths.make_writable(projected)
     projected.unlink()
     assert not projected.exists()
@@ -172,7 +173,7 @@ def test_download_auto_falls_back_to_html(root):
     status = {(item["kind"], item["status"]) for item in outcome.artifacts}
     assert ("source_tar_gz", "failed") in status
     assert ("source_html", "fetched") in status
-    assert (paths.work_dir(root, "wk1") / "source.html").is_file()
+    assert (root / "works" / "2026-T-wk1" / "source.html").is_file()
 
 
 def test_download_refresh_true_uses_validators_and_reuses_on_304(root):
@@ -270,7 +271,7 @@ def test_download_all_keeps_going_when_one_route_fails(root):
     assert ("source_tar_gz", "fetched") in status
     assert ("source_html", "fetched") in status
     assert ("source_pdf", "failed") in status  # 未登记 → 404
-    assert (paths.work_dir(root, "wk1") / "source.pdf").exists() is False
+    assert (root / "works" / "2026-T-wk1" / "source.pdf").exists() is False
 
 
 def test_download_pdf_is_its_own_kind(root):
@@ -280,7 +281,7 @@ def test_download_pdf_is_its_own_kind(root):
 
     entry = outcome.artifacts[0]
     assert entry["kind"] == "source_pdf" and entry["status"] == "fetched"
-    assert (paths.work_dir(root, "wk1") / "source.pdf").is_file()
+    assert (root / "works" / "2026-T-wk1" / "source.pdf").is_file()
 
 
 def test_download_without_arxiv_record_is_source_error(root):

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from . import config, envelope, group, htmlclean, paths, report, store, textify, venues
+from . import config, envelope, group, htmlclean, identity, paths, report, store, textify, venues
 from .sources import SearchSpec, SourceError, normalize_doi as source_normalize_doi
 from .sources import arxiv as arxiv_source
 from .sources import crossref as crossref_source
@@ -152,8 +152,12 @@ def _fts_query(spec: SearchSpec) -> str:
     return "(" + ") AND (".join(groups) + ")"
 
 
-def _body_work_keys(root, spec: SearchSpec) -> list[str]:
-    """--in body|both：对 works/ 做线性子串扫描（ADR-0036）。"""
+def _body_work_keys(conn, root, spec: SearchSpec) -> list[str]:
+    """--in body|both：对 works/ 做线性子串扫描（ADR-0036）。
+
+    目录名 → `work_key` 只看尾段 20 位（ADR-0068 决策 7）；不匹配的目录跳过——
+    `works/` 里可能有手工放进去的东西，为它报错只会挡住检索。
+    """
     base = paths.works_dir(root)
     if not base.is_dir():
         return []
@@ -164,13 +168,16 @@ def _body_work_keys(root, spec: SearchSpec) -> list[str]:
     for work in sorted(base.iterdir()):
         if not work.is_dir():
             continue
+        key = identity.work_key_of(work.name)
+        if key is None:
+            continue
         for doc in sorted(work.rglob("*.md")):
             try:
                 text = doc.read_text(encoding="utf-8", errors="replace").lower()
             except OSError:
                 continue
             if any(needle in text for needle in needles):
-                found.append(work.name)
+                found.append(store.resolve_work(conn, key))
                 break
     return found
 
@@ -225,7 +232,7 @@ def local_work_keys(
     )
     keys = [row["work_key"] for row in conn.execute(sql, params)]
     if in_scope in ("body", "both"):
-        for key in _body_work_keys(root, spec):
+        for key in _body_work_keys(conn, root, spec):
             if key not in keys:
                 keys.append(key)
     return keys
@@ -921,6 +928,46 @@ def _reuse(root, cached) -> dict:
     )
 
 
+def _work_projection(conn, root, work_key: str) -> Path:
+    """投影目录：按当前元数据对账（改名、清掉合并空壳），返回可用目录（不建）。
+
+    ADR-0068 决策 5/6：目录名是**对账出来**的，不是算出来的。改名与删除都尽力而为——
+    失败就沿用现有目录，展示层的动作不该挡住取件。
+    """
+    base = paths.works_dir(root)
+    base.mkdir(parents=True, exist_ok=True)
+    work_key = store.resolve_work(conn, work_key)
+    name = store.projection_name(conn, work_key)
+    merged = store.merged_targets(conn)
+    stale: list[Path] = []
+    current = False
+    for entry in sorted(base.iterdir()):
+        if not entry.is_dir():
+            continue
+        key = identity.work_key_of(entry.name)
+        if key is None:
+            continue
+        if key in merged:
+            paths.remove_tree(entry)  # 合并后的空壳：成员已经搬走了（决策 6）
+            continue
+        if key != work_key:
+            continue
+        if entry.name == name:
+            current = True
+        else:
+            stale.append(entry)
+    target = paths.work_dir(root, name)
+    if current:
+        return target
+    for old in stale:
+        try:
+            old.rename(target)
+        except OSError:
+            return old  # 改名失败：沿用旧目录（决策 5）
+        return target
+    return target
+
+
 def run_download(
     root,
     work_key: str,
@@ -929,7 +976,7 @@ def run_download(
     refresh: str = "auto",
     client=None,
 ) -> DownloadOutcome:
-    """取**原始字节**存 `bytes/`、投影 `works/<work_key>/source.*`、登记 `artifact`。
+    """取**原始字节**存 `bytes/`、投影 `works/<proj>/source.*`、登记 `artifact`。
 
     契约：IFACE §1 的 download 行、IFACE-PAYLOAD §5.1、ADR-0067 决策 4/5/6。
     **这里不转换**——转换属于 `read`。缓存判据是版本相等：`--refresh auto` 命中即零请求，
@@ -1048,7 +1095,7 @@ def run_download(
             detail = "; ".join(item["kind"] + "=" + item["reason"] for item in failures)
             raise envelope.EnvelopeError(envelope.SOURCE_ERROR, "取件失败：" + detail)
 
-        target = paths.work_dir(root, work_key)
+        target = _work_projection(conn, root, work_key)
         for item in served:
             name = PROJECTION_NAMES.get(item["kind"])
             if not name:

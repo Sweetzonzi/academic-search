@@ -1,4 +1,4 @@
-"""确定性身份派生：record_uid、normalize(source_id)、title_key。
+"""确定性身份派生：record_uid、normalize(source_id)、title_key、投影目录名。
 
 契约：docs/接口/存储与迁移.md §1（公式的唯一家）。
 本模块不改库、不联网。
@@ -30,6 +30,19 @@ _LEADING_ARTICLE_RE = re.compile(r"^(a|an|the)\s+")
 _SURNAME_PUNCT_RE = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
 
 _WS_RE = re.compile(r"\s+")
+
+#: 投影目录名（works/<proj>）里换掉的字符：Windows 禁用集 + 控制字符（ADR-0068 决策 3）。
+_SLUG_BAD_RE = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]+')
+
+#: `work_key` 的形状：20 位小写 base32，与 record_uid 的取值域相同（IFACE-STORE §1）。
+WORK_KEY_LEN = 20
+_WORK_KEY_RE = re.compile(r"^[a-z2-7]{" + str(WORK_KEY_LEN) + r"}$")
+
+#: 投影目录名各段的上限（ADR-0068 决策 3）：总长 / 标题 / 首作者。
+PROJECTION_MAX = 84
+PROJECTION_TITLE_MAX = 50
+PROJECTION_TITLE_MIN = 20
+PROJECTION_AUTHOR_MAX = 12
 
 
 def normalize_source_id(source: str, source_id: str) -> str:
@@ -82,11 +95,10 @@ def title_key(title: str) -> str:
     return text.strip()
 
 
-def first_author_surname(authors: Sequence[str] | str | None) -> str:
-    """从作者数组取一作姓氏，小写。
+def _surname(authors: Sequence[str] | str | None) -> str:
+    """一作姓氏的原文（保留大小写与标点），取不到空串。
 
-    支持 "Given Family" 与 "Family, Given" 两种常见形态；取不到空串。
-    这是 L2 的辅助字段，允许启发式（DESIGN §4.2.3）。
+    支持 "Given Family" 与 "Family, Given" 两种常见形态。
     """
     if not authors:
         return ""
@@ -99,5 +111,69 @@ def first_author_surname(authors: Sequence[str] | str | None) -> str:
     else:
         parts = name.split()
         surname = parts[-1] if parts else ""
-    surname = unicodedata.normalize("NFKC", surname).lower()
-    return _SURNAME_PUNCT_RE.sub("", surname)
+    return unicodedata.normalize("NFKC", surname).strip()
+
+
+def first_author_surname(authors: Sequence[str] | str | None) -> str:
+    """从作者数组取一作姓氏，小写成匹配键。
+
+    这是 L2 的辅助字段，允许启发式（DESIGN §4.2.3）；给人看的那个走
+    `projection_slug`（保留大小写）。
+    """
+    return _SURNAME_PUNCT_RE.sub("", _surname(authors).lower())
+
+
+def _slug_text(value: str | None) -> str:
+    """一段自由文本 → 目录名的一段：禁用字符换空格 → 空白折叠成 `-` → 去首尾 `.` / `-`。"""
+    text = _SLUG_BAD_RE.sub(" ", str(value or ""))
+    return _WS_RE.sub("-", text).strip(".-")
+
+
+def _cut(text: str, limit: int) -> str:
+    """按词边界（`-`）截断；单个词本身就超长时硬截。"""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    boundary = head.rfind("-")
+    if boundary > 0:
+        head = head[:boundary]
+    return head.strip(".-")
+
+
+def projection_slug(
+    work_key: str,
+    *,
+    title: str | None = None,
+    authors: Sequence[str] | str | None = None,
+    published_at: str | None = None,
+) -> str:
+    """`works/<proj>` 的目录名：`<年>-<首作者>-<标题>-<work_key>`（ADR-0068 决策 3）。
+
+    纯函数、只吃展示记录（`aggregate_work` 的那三个字段）。前几段是渲染、会随元数据变；
+    **尾段恒为 work_key**，是唯一可反解的身份段（决策 2）。名字给人看，因此保留
+    大小写与非 ASCII——不做 `title_key` 那种小写归一。
+    """
+    key = (work_key or "").strip()
+    if not key:
+        raise ValueError("work_key 不能为空")
+    parts: list[str] = []
+    year = (published_at or "").strip()[:4]
+    if len(year) == 4 and year.isdigit():
+        parts.append(year)
+    author = _cut(_slug_text(_surname(authors)), PROJECTION_AUTHOR_MAX)
+    if author:
+        parts.append(author)
+    # 段间的分隔符也占位：总名不超过 PROJECTION_MAX，标题段至少留 PROJECTION_TITLE_MIN
+    room = PROJECTION_MAX - len(key) - 1 - sum(len(part) + 1 for part in parts)
+    heading = _cut(_slug_text(title), min(PROJECTION_TITLE_MAX, max(room, PROJECTION_TITLE_MIN)))
+    return "-".join(parts + [heading or "untitled", key])
+
+
+def work_key_of(dirname: str) -> str | None:
+    """目录名 → `work_key`：只看最后 20 个字符（ADR-0068 决策 2/7）。
+
+    尾段不匹配 `[a-z2-7]{20}` 就返回 None——调用方跳过，不报错：
+    `works/` 里可能有手工放进去的东西。
+    """
+    tail = (dirname or "")[-WORK_KEY_LEN:]
+    return tail if _WORK_KEY_RE.match(tail) else None

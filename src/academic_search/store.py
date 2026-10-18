@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
 
-from . import envelope
+from . import envelope, identity
 
 #: sidecar 整库版本，与对外的 envelope.SCHEMA_VERSION 是两件事。
 #: 2：`record.venue_source_ids`（ADR-0060）、`record_ident.kind`（ADR-0064）。
@@ -505,6 +505,14 @@ def merge_works(conn: sqlite3.Connection, keep: str, drop: str) -> None:
     conn.execute("UPDATE work SET merged_into = ? WHERE work_key = ?", (keep, drop))
 
 
+def merged_targets(conn: sqlite3.Connection) -> dict[str, str]:
+    """`work_key → merged_into`，只含被合并掉的那些（投影清理用，ADR-0068 决策 6）。"""
+    rows = conn.execute(
+        "SELECT work_key, merged_into FROM work WHERE merged_into IS NOT NULL"
+    ).fetchall()
+    return {row["work_key"]: row["merged_into"] for row in rows}
+
+
 # --------------------------------------------------------------------------
 # artifact / derived_content（M2 使用，DDL 先就位）
 # --------------------------------------------------------------------------
@@ -741,3 +749,19 @@ def aggregate_work(conn: sqlite3.Connection, work_key: str) -> dict | None:
 
 def work_ids(conn: sqlite3.Connection) -> list[str]:
     return [r["work_key"] for r in conn.execute("SELECT work_key FROM work ORDER BY work_key")]
+
+
+def projection_name(conn: sqlite3.Connection, work_key: str) -> str:
+    """`works/<proj>` 的目录名（IFACE-STORE §2）：可读段取自展示记录，尾段是 `work_key`。
+
+    与 `aggregate_work` 用**同一条**展示记录，否则同一篇在 `search` 与 `works/` 的
+    目录名里会叫两个名字（ADR-0068 决策 4）。SQL 在 store、拼路径在 paths（DEV-CONV §4）。
+    """
+    key = resolve_work(conn, work_key)
+    item = aggregate_work(conn, key) or {}
+    return identity.projection_slug(
+        key,
+        title=item.get("title"),
+        authors=item.get("authors"),
+        published_at=item.get("published_at"),
+    )

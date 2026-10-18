@@ -82,3 +82,62 @@ def test_first_author_surname_forms():
     assert identity.first_author_surname(["Doe, Jane"]) == "doe"
     assert identity.first_author_surname([]) == ""
     assert identity.first_author_surname(None) == ""
+
+#: 20 位小写 base32，与 record_uid 的取值域相同。
+KEY = "ed3nmsifcbdwbn436i5a"
+
+
+def test_projection_slug_shape():
+    slug = identity.projection_slug(
+        KEY, title="World Models", authors=["Jane Doe"], published_at="2026-10-01",
+    )
+    assert slug == "2026-Doe-World-Models-" + KEY
+
+
+def test_projection_slug_omits_the_missing_segments():
+    assert identity.projection_slug(KEY, title="T") == "T-" + KEY
+    assert identity.projection_slug(KEY, title="T", authors=[]) == "T-" + KEY
+
+
+def test_projection_slug_falls_back_to_untitled():
+    assert identity.projection_slug(KEY, title="  ...  ") == "untitled-" + KEY
+    assert identity.projection_slug(KEY, title=None) == "untitled-" + KEY
+
+
+def test_projection_slug_cleans_windows_forbidden_characters():
+    slug = identity.projection_slug(KEY, title='A/B: "C" <D>|?*', published_at="2026-01-02")
+    assert slug == "2026-A-B-C-D-" + KEY
+    assert not set(slug) & set('<>:"/\\|?*')
+
+
+def test_projection_slug_keeps_case_and_cjk():
+    assert identity.projection_slug(
+        KEY, title="世界模型 World Model", authors=["张三"], published_at="2026-10-01",
+    ) == "2026-张三-世界模型-World-Model-" + KEY
+    # "Doe, Jane" 这种形态取逗号前那一段；"Longsurname" 截 12 字符
+    assert identity.projection_slug(
+        KEY, title="T", authors=["Doe, Jane"], published_at="2026-10-01",
+    ) == "2026-Doe-T-" + KEY
+    assert identity.projection_slug(
+        KEY, title="T", authors=["A Verylongsurname"], published_at="2026-10-01",
+    ) == "2026-Verylongsurn-T-" + KEY
+
+
+def test_projection_slug_caps_the_total_length():
+    title = " ".join(["word"] * 40)
+    slug = identity.projection_slug(
+        KEY, title=title, authors=["Jane Doe"], published_at="2026-10-01",
+    )
+    assert len(slug) <= identity.PROJECTION_MAX
+    assert slug.endswith("-" + KEY)
+    assert "--" not in slug  # 截断按词边界，不留空段
+    assert slug.startswith("2026-Doe-word-word-")
+
+
+def test_work_key_of_reads_only_the_tail():
+    assert identity.work_key_of("2026-Doe-T-" + KEY) == KEY
+    assert identity.work_key_of(KEY) == KEY
+    assert identity.work_key_of(KEY.upper()) is None  # 尾段必须是小写 base32
+    assert identity.work_key_of("notes") is None  # 手工目录：跳过，不报错
+    assert identity.work_key_of("2026-Doe-T") is None
+    assert identity.work_key_of("") is None
