@@ -75,7 +75,7 @@ academic-search/
 ├─ skills/academic-search/    # 交付物：SKILL.md + references/ + scripts/
 ├─ src/                       # CLI 实现（核心链路仅用标准库）
 ├─ bytes/<sha 前2位>/<sha256> # 内容坐标：内容寻址的字节实体，只读（不进版本库）
-├─ works/<work_key>/          # 作品坐标：人读投影，指向 bytes/ 的硬链接（可重建）
+├─ works/<proj>/              # 作品坐标：人读投影（<年>-<首作者>-<标题>-<work_key>），指向 bytes/ 的硬链接（可重建）
 ├─ config/profile.toml        # 领域画像：唯一不可重建的用户数据；**整个 `config/` 都不进版本库**，缺省值由 `src` 内的 `DEFAULT_*` 兜底
 ├─ config/sources.toml        # 启用的检索数据库与开关
 ├─ config/search.toml         # 刷新阈值、增量回看天数、黑名单、摘要截断长度

@@ -31,7 +31,7 @@ academic-search/
 ├─ skills/academic-search/    # 交付物：SKILL.md + references/ + launcher（薄 bundle，见 IFACE-SKILL）
 ├─ src/                       # CLI 实现（核心链路仅用标准库）
 ├─ bytes/<sha 前2位>/<sha256> # 内容坐标：内容寻址的字节实体（不进版本库）
-├─ works/<work_key>/          # 作品坐标：人读投影，硬链接（可重建）
+├─ works/<proj>/              # 作品坐标：人读投影，硬链接（可重建）
 ├─ config/                    # 用户配置：profile.toml、sources.toml、search.toml、terms.toml（不进版本库）
 ├─ data/                      # sidecar.db、runs/<run_id>/（不进版本库）
 └─ tests/                     # 含 fixtures/：脱敏真实响应
