@@ -557,3 +557,71 @@ def test_both_thresholds_are_anded(root, monkeypatch):
     assert len(outcome.items) == 1
     item = outcome.items[0]
     assert item["cited_by_count"] >= 1000 and item["fwci"] >= 2.0
+
+
+# --------------------------------------------------------------------------
+# --in 三档：meta / body / both（ADR-0036 决策 2）
+# --------------------------------------------------------------------------
+
+#: 20 位小写 base32——正文一路靠目录名尾段反解出它。
+BODY_KEY = "abcdefghijklmnopqrst"
+
+
+def _insert_work(root, key, *, title, source="arxiv", source_id=None, body=None):
+    """一条记录 + 一个 work；给了 body 就顺手写 `works/<proj>/paper.md`。"""
+    conn = store.connect(config.db_path(root))
+    with store.write_tx(conn):
+        store.insert_record(conn, {
+            "record_uid": key, "source": source, "source_id": source_id or key,
+            "title": title, "abstract": title, "published_at": "2026-10-01",
+        })
+        store.create_work(conn, key)
+        store.add_member(conn, key, key, "primary")
+    conn.close()
+    if body is not None:
+        doc = root / "works" / ("2026-Doe-Probe-" + key) / "paper.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(body, encoding="utf-8")
+    return key
+
+
+def test_in_meta_body_both_are_three_different_result_sets(root):
+    """同一检索式：标题命中 vs 正文命中，三档各给一个集合。"""
+    in_body = _insert_work(root, BODY_KEY, title="Body Probe",
+                           body="# paper\n\n世界模型 world model 只在正文里\n")
+    in_title = _insert_work(root, "bcdefghijklmnopqrstu", title="World Model Survey")
+    spec = SearchSpec(any_of=["world model"])
+    call = dict(refresh="false", sources=["arxiv"])
+
+    meta = service.run_search(root, spec, in_scope="meta", **call)
+    body = service.run_search(root, spec, in_scope="body", **call)
+    both = service.run_search(root, spec, in_scope="both", **call)
+
+    assert [item["work_key"] for item in meta.items] == [in_title]  # 正文命中不算
+    assert [item["work_key"] for item in body.items] == [in_body]  # 标题命中不算
+    assert sorted(item["work_key"] for item in both.items) == sorted([in_body, in_title])
+
+
+def test_in_body_still_honours_the_source_filter(root):
+    """正文一路与非文本过滤同一套口径：`--source` 排除的 work 也不该从正文钻进来。"""
+    _insert_work(root, BODY_KEY, title="Body Probe", body="world model\n")
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["world model"]),
+        refresh="false", sources=["openalex"], in_scope="body",
+    )
+    assert outcome.items == []
+
+
+def test_in_body_never_goes_online_on_auto(root, monkeypatch):
+    """正文只在本地语料里；`--refresh auto` 在 body 档不该为它发请求（ADR-0036 决策 2）。"""
+    def boom():
+        raise AssertionError("body 档不该联网")
+
+    monkeypatch.setattr(service, "make_client", boom)
+    _insert_work(root, BODY_KEY, title="Body Probe", body="world model\n")
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["world model"]), refresh="auto",
+        sources=["arxiv"], in_scope="body",
+    )
+    assert outcome.network is False
+    assert [item["work_key"] for item in outcome.items] == [BODY_KEY]

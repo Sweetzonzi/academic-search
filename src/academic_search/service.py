@@ -207,14 +207,14 @@ def local_work_keys(
     conn, spec: SearchSpec, *, sources: Iterable[str], from_date: str | None,
     to_date: str | None, in_scope: str, root,
 ) -> list[str]:
+    """`--in` 三档的候选集：`meta` 只走 FTS5、`body` 只扫 `works/`、`both` 取并集。
+
+    三档是**两个数据源的三档开关**，不是同一档的宽窄（ADR-0036 决策 2）；两路都过
+    同一套非文本过滤（`status` / `--source` / 日期窗），逐 work 去重后再交给
+    `_sorted_items` 判 venue / 作者 / 阈值 / 撤稿。没有检索式时三档同义：列出本地库。
+    """
     where = ["r.status = 'live'"]
     params: list = []
-    if spec.all_of or spec.any_of:
-        rids = store.search_fts(conn, _fts_query(spec), 500)
-        if not rids:
-            return []
-        where.append("r.record_uid IN (" + ",".join("?" for _ in rids) + ")")
-        params.extend(rids)
     source_list = [s for s in sources]
     if source_list:
         where.append("r.source IN (" + ",".join("?" for _ in source_list) + ")")
@@ -225,17 +225,29 @@ def local_work_keys(
     if to_date:
         where.append("(r.published_at IS NULL OR r.published_at <= ?)")
         params.append(to_date)
-    sql = (
-        "SELECT DISTINCT wm.work_key FROM record r "
-        "JOIN work_member wm ON wm.record_uid = r.record_uid "
-        "WHERE " + " AND ".join(where) + " ORDER BY wm.work_key"
-    )
-    keys = [row["work_key"] for row in conn.execute(sql, params)]
+
+    def scoped(seed: str | None, seed_params: Sequence = ()) -> list[str]:
+        """把一条「种子」子句过一遍非文本过滤，返回 work_key。"""
+        clauses = ([seed] if seed else []) + where
+        sql = (
+            "SELECT DISTINCT wm.work_key FROM record r "
+            "JOIN work_member wm ON wm.record_uid = r.record_uid "
+            "WHERE " + " AND ".join(clauses) + " ORDER BY wm.work_key"
+        )
+        return [row["work_key"] for row in conn.execute(sql, list(seed_params) + params)]
+
+    if not (spec.all_of or spec.any_of):
+        return scoped(None)  # 裸 search：列本地库，与 --in 无关
+    keys: list[str] = []
+    if in_scope in ("meta", "both"):
+        rids = store.search_fts(conn, _fts_query(spec), 500)
+        if rids:
+            keys.extend(scoped("r.record_uid IN (" + ",".join("?" for _ in rids) + ")", rids))
     if in_scope in ("body", "both"):
-        for key in _body_work_keys(conn, root, spec):
-            if key not in keys:
-                keys.append(key)
-    return keys
+        seeds = _body_work_keys(conn, root, spec)
+        if seeds:
+            keys.extend(scoped("wm.work_key IN (" + ",".join("?" for _ in seeds) + ")", seeds))
+    return list(dict.fromkeys(keys))  # 并集保序去重
 
 
 def _sorted_items(
@@ -489,6 +501,9 @@ def run_search(
     venue_ids = _resolve_names(spec.venues, what="venue 白名单")
     blocked_venues = _resolve_names(venue_blacklist, what="venue 黑名单")
     skipped = _skip_legs(spec, venue_ids=venue_ids)
+    # 正文只在本地语料里，body 档不该为了它去联网（ADR-0036 决策 2）；显式 true 仍照字面执行
+    if in_scope == "body" and refresh == "auto":
+        refresh = "false"
     conn = store.connect(config.db_path(root))
     try:
         spec_key = config.spec_hash(

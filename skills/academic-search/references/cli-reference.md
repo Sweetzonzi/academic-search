@@ -18,7 +18,7 @@
 | `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
 | `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §6 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
-| `--in meta\|body\|both` | `meta` | `body` / `both` 扫 `works/`（按需生成的正文目录）；还没有生成过正文时，效果等于 `meta` |
+| `--in meta\|body\|both` | `meta` | `meta` = 只查标题/摘要；`body` = **只**扫 `works/` 下的 `paper.md`（不联网）；`both` = 两路并集。还没有生成过正文时 `body` 一条都不回 |
 | `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档是两次不同的请求，各抓一次，因此换档会联网、也各算一次检索。注意它排的是**全局**被引，见下面的坑 |
 | `--min-citations N` | 关闭 | 原始被引下限：远端下发 `filter=cited_by_count:>N`，本地按同一条件再判一次，**`cited_by_count` 为空即不通过**；给了它就**跳过 arXiv 腿**（那边没有被引数据）。与主题条件是**与**关系，叠加不额外计费 |
 | `--min-fwci X` | 关闭 | 领域归一化被引下限，同上（`filter=fwci:>X`）；与 `--min-citations` 同时给出时**取与**。**覆盖不完整**：很新的论文与部分类型没有该值，而空值不通过 → 它偏向**有一定年头**的文献，见下面的坑 |
