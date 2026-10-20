@@ -687,3 +687,97 @@ def test_lookup_title_miss_never_claims_network(root, capsys):
         message = envelope_of(capsys)["error"]["message"]
         assert "不联网" in message
         assert "联网未取到" not in message
+
+
+@pytest.mark.parametrize("source", ["nosuch", "crossref", "openalex"])
+def test_search_rejects_unavailable_explicit_sources(root, capsys, monkeypatch, source):
+    if source == "openalex":
+        (root / "config/sources.toml").write_text('[openalex]\nenabled=false\n', encoding="utf-8")
+    monkeypatch.setattr(service, "make_client", lambda: pytest.fail("无效来源不能联网"))
+    code = cli.main(["--root", str(root), "search", "--source", source, "--refresh", "false"])
+    env = envelope_of(capsys)
+    assert code == 1 and env["error"]["code"] == "invalid_args"
+    assert source in env["error"]["message"]
+    assert not config.db_path(root).exists(), "参数错误应在建库前返回"
+
+
+def test_search_with_no_enabled_sources_cannot_fall_back_to_all(root, capsys):
+    (root / "config/sources.toml").write_text(
+        '[openalex]\nenabled=false\n[arxiv]\nenabled=false\n', encoding="utf-8"
+    )
+    assert cli.main(["--root", str(root), "search", "--refresh", "false"]) == 1
+    assert envelope_of(capsys)["error"]["code"] == "invalid_args"
+
+
+@pytest.mark.parametrize("option", ["--all-of", "--any-of", "--author", "--venue"])
+@pytest.mark.parametrize("values", [[""], ["valid", "  "]])
+def test_search_rejects_blank_values_before_fts(root, capsys, option, values):
+    assert cli.main(["--root", str(root), "search", option, *values, "--refresh", "false"]) == 1
+    env = envelope_of(capsys)
+    assert env["error"]["code"] == "invalid_args"
+    assert option in env["error"]["message"]
+
+
+def test_duplicate_source_does_not_fetch_twice(root, capsys, monkeypatch):
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    assert cli.main(["--root", str(root), "search", "--any-of", "control",
+                     "--source", "openalex", "--source", "openalex", "--refresh", "true"]) == 0
+    assert envelope_of(capsys)["data"]["cost"]["requests"] == 1
+    assert len(client.urls) == 1
+
+
+def test_partial_source_failure_does_not_lock_the_query_fresh(root):
+    class PartialClient(FixtureClient):
+        def get(self, url, headers=None, source=""):
+            if source == "arxiv":
+                self.requests += 1
+                raise service.SourceError(source, "503 临时失败", True)
+            return super().get(url, headers=headers, source=source)
+
+    spec = SearchSpec(any_of=["control"])
+    first = service.run_search(root, spec, refresh="true", client=PartialClient())
+    assert first.counts["failures"] and first.counts["complete"] is False
+    second = service.run_search(root, spec, refresh="auto", client=FixtureClient())
+    assert second.network is True and second.counts["complete"] is True
+    assert second.counts["failures"] == []
+    third = service.run_search(root, spec, refresh="auto", client=FixtureClient())
+    assert third.network is False, "完整采集之后才复用新鲜度"
+
+
+def test_search_honours_configured_quota_threshold(root, capsys, monkeypatch):
+    class LowQuotaClient(FixtureClient):
+        def get(self, url, headers=None, source=""):
+            response = super().get(url, headers=headers, source=source)
+            self.rate_remaining_usd = 0.1
+            return response
+
+    (root / "config/search.toml").write_text('[quota]\nmin_remaining_usd=0.5\n', encoding="utf-8")
+    client = LowQuotaClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    assert cli.main(["--root", str(root), "search", "--any-of", "control", "--refresh", "true"]) == 0
+    data = envelope_of(capsys)["data"]
+    assert data["network"] is True and data["cost"]["requests"] == 1
+    assert data["counts"]["by_source"]["arxiv"] == 0
+    assert data["counts"]["complete"] is False and "余额不足" in data["degraded"]["reason"]
+    assert not any("export.arxiv.org" in url for url in client.urls)
+
+
+def test_all_sources_skipped_is_not_a_network_refresh(root):
+    client = FixtureClient()
+    spec = SearchSpec(any_of=["control"], min_citations=1)
+    outcome = service.run_search(root, spec, sources=["arxiv"], refresh="true", client=client)
+    assert outcome.network is False and client.requests == 0
+    assert outcome.counts["complete"] is False
+    conn = store.connect(config.db_path(root))
+    try:
+        row = conn.execute("SELECT refreshed FROM run ORDER BY run_id DESC LIMIT 1").fetchone()
+        assert row["refreshed"] == 0
+    finally:
+        conn.close()
+
+
+def test_offline_identifier_miss_never_claims_network(root, capsys):
+    assert cli.main(["--root", str(root), "lookup", "--doi", "10.9999/missing", "--refresh", "false"]) == 1
+    message = envelope_of(capsys)["error"]["message"]
+    assert "不联网" in message and "联网未取到" not in message

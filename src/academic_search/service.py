@@ -417,6 +417,7 @@ def collect_run(
 
     返回该 run 的原始值：`run_id` / `status` / `refreshed` / `counts` / `cost` /
     `responses` / `degraded` / `skip_reason` / `all_failed`。
+    counts.complete 只证明未被条件排除的来源都取完本次规定的一页，不证明全库召回完整。
     """
     if not _should_refresh(conn, spec_key, refresh, max_age_hours):
         do_refresh, skip_reason = False, ("freshness" if refresh == "auto" else None)
@@ -446,7 +447,7 @@ def collect_run(
     requests_before, cost_before = client.requests, client.cost_usd
     with store.write_tx(conn):
         run_id = store.start_run(
-            conn, spec_hash=spec_key, query_name=query_name, refreshed=True,
+            conn, spec_hash=spec_key, query_name=query_name, refreshed=False,
             window_from=from_date, window_to=to_date,
         )
     failures: list[dict] = []
@@ -499,17 +500,19 @@ def collect_run(
     # 花费按**本次 run 的增量**记：多查询 sync 共用一个客户端，累计值不能当单 run 的值。
     requests = client.requests - requests_before
     cost_usd = client.cost_usd - cost_before
+    refreshed = requests > 0
+    counts["complete"] = bool(attempted) and refreshed and not failures and not quota_hit
     responses = _archive_responses(root, run_id, client, log_start, with_records) if archive else []
     with store.write_tx(conn):
         store.finish_run(
             conn, run_id, status="failed" if all_failed else "ok", requests=requests,
             cost_usd=cost_usd, cost_basis=client.cost_basis, counts=counts,
-            responses=responses or None,
+            responses=responses or None, refreshed=refreshed,
         )
     return {
         "run_id": run_id,
         "status": "failed" if all_failed else "ok",
-        "refreshed": True,
+        "refreshed": refreshed,
         "counts": counts,
         "cost": {"usd": round(cost_usd, 6), "basis": client.cost_basis, "requests": requests},
         "responses": responses,
@@ -536,6 +539,7 @@ def run_search(
     abstract: bool = False,
     abstract_chars: int = config.DEFAULT_ABSTRACT_CHARS,
     max_candidates: int = config.DEFAULT_LOCAL_MAX_CANDIDATES,
+    quota_min_usd: float | None = config.DEFAULT_MIN_REMAINING_USD,
     client=None,
     today=None,
 ) -> Outcome:
@@ -563,7 +567,7 @@ def run_search(
             conn, root, spec, spec_key=spec_key, query_name=None, sources=sources,
             refresh=refresh, max_age_hours=max_age_hours, from_date=from_date,
             to_date=to_date, venue_ids=venue_ids, blocked_venues=blocked_venues,
-            skipped=skipped, sort=sort, client=client,
+            skipped=skipped, sort=sort, client=client, quota_min_usd=quota_min_usd,
         )
         if collected["all_failed"]:
             failures = collected["counts"]["failures"]
@@ -682,7 +686,7 @@ def _sync_degraded(fresh: int, quota_skips: int, quota_stops: int, total: int) -
 def _query_window(conn, query, *, lookback_days: int, today):
     """窗口按查询现场算：**首次执行**用它的 `since_years`，否则用 `lookback_days`。
 
-    判据是该 `query_name` 在账本里有没有成功行，不新增列（ADR-0066 决策 9）。
+    判据是该 `query_name` 在账本里有没有完整联网采集行，不新增列。
     画像里后来新加的方向因此能按自己的 `since_years` 回溯，而不是永远只有 30 天。
     """
     if store.has_successful_query(conn, query.name):
@@ -898,7 +902,10 @@ def run_lookup(
                     "标题未命中本地；`--title` 只做标题+摘要的短语匹配、从不联网，"
                     "换更准的写法或改用 --doi / --arxiv",
                 )
-            raise envelope.EnvelopeError(envelope.NOT_FOUND, "标识未命中，且联网未取到")
+            message = "标识未命中，且联网未取到" if outcome.network else (
+                "标识未命中本地；--refresh false 不联网"
+            )
+            raise envelope.EnvelopeError(envelope.NOT_FOUND, message)
         return outcome
     finally:
         conn.close()

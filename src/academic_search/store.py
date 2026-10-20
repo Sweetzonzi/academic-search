@@ -218,12 +218,13 @@ def finish_run(
     cost_basis: str | None,
     counts: Mapping | None,
     responses: Sequence | None = None,
+    refreshed: bool | None = None,
 ) -> None:
     conn.execute(
         """
         UPDATE run
            SET finished_at = ?, status = ?, requests = ?, cost_usd = ?, cost_basis = ?,
-               counts = ?, responses = ?
+                counts = ?, responses = ?, refreshed = COALESCE(?, refreshed)
          WHERE run_id = ?
         """,
         (
@@ -234,30 +235,36 @@ def finish_run(
             cost_basis,
             json.dumps(counts, ensure_ascii=False) if counts is not None else None,
             json.dumps(responses, ensure_ascii=False) if responses is not None else None,
+            int(refreshed) if refreshed is not None else None,
             run_id,
         ),
     )
 
 
+def _last_complete_refresh(conn: sqlite3.Connection, column: str, value: str) -> str | None:
+    # column 只来自下面两个内部调用；值仍走 SQL 参数。
+    assert column in {"spec_hash", "query_name"}
+    rows = conn.execute(
+        "SELECT started_at, counts FROM run WHERE " + column + " = ?"
+        " AND refreshed = 1 AND requests > 0 AND status = 'ok' ORDER BY run_id DESC",
+        (value,),
+    )
+    for row in rows:
+        counts = json.loads(row["counts"] or "{}")
+        # 缺标记的历史行无法证明采集完整，不把它当成新鲜或完成回溯的依据。
+        if counts.get("complete") is True:
+            return row["started_at"]
+    return None
+
+
 def last_refresh_at(conn: sqlite3.Connection, spec_hash: str) -> str | None:
-    """同一检索式最近一次真正联网成功的 run 的 started_at。"""
-    row = conn.execute(
-        """
-        SELECT started_at FROM run
-         WHERE spec_hash = ? AND refreshed = 1 AND status = 'ok'
-         ORDER BY run_id DESC LIMIT 1
-        """,
-        (spec_hash,),
-    ).fetchone()
-    return row["started_at"] if row else None
+    """同一检索式最近一次完整联网采集的 started_at。"""
+    return _last_complete_refresh(conn, "spec_hash", spec_hash)
 
 
 def has_successful_query(conn: sqlite3.Connection, query_name: str) -> bool:
-    """该具名查询在账本里有没有成功行——ADR-0066 决策 9 的「首次执行」判据。"""
-    row = conn.execute(
-        "SELECT 1 FROM run WHERE query_name = ? AND status = 'ok' LIMIT 1", (query_name,)
-    ).fetchone()
-    return row is not None
+    """该具名查询是否已完成一次完整联网采集；离线和部分采集不算。"""
+    return _last_complete_refresh(conn, "query_name", query_name) is not None
 
 
 def candidates_first_seen_in_run(conn: sqlite3.Connection, run_id: int) -> list[str]:

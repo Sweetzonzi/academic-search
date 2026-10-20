@@ -97,7 +97,19 @@ def _dispatch(args, name: str):
         cfg = config.load_search(root)
         enabled = config.load_sources(root)
         requested = list(args.source) if args.source else config.active_sources(enabled)
-        sources = [s for s in requested if s in config.SEARCH_SOURCES and enabled.get(s)]
+        invalid = [s for s in requested if s not in config.SEARCH_SOURCES or not enabled.get(s)]
+        if invalid or not requested:
+            raise envelope.EnvelopeError(
+                envelope.INVALID_ARGS,
+                "search 来源未知、不支持或未启用：" + "、".join(invalid or ["没有启用的采集源"]),
+            )
+        sources = list(dict.fromkeys(requested))
+        for option in ("all_of", "any_of", "venue", "author"):
+            values = getattr(args, option)
+            if any(not value.strip() for value in values):
+                raise envelope.EnvelopeError(
+                    envelope.INVALID_ARGS, "--" + option.replace("_", "-") + " 不能包含空值",
+                )
         spec = SearchSpec(
             all_of=list(args.all_of),
             any_of=list(args.any_of),
@@ -113,6 +125,7 @@ def _dispatch(args, name: str):
             sort=args.sort, in_scope=args.in_scope, venue_blacklist=cfg.venue_blacklist,
             abstract=args.abstract, abstract_chars=cfg.abstract_chars,
             max_candidates=cfg.local_max_candidates,
+            quota_min_usd=cfg.min_remaining_usd,
         )
         return outcome.payload(), 0
 

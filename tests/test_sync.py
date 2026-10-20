@@ -280,6 +280,45 @@ def test_first_execution_uses_since_years_then_lookback(root, capsys, monkeypatc
     assert span == config.DEFAULT_LOOKBACK_DAYS
 
 
+@pytest.mark.parametrize("initial_mode", ["offline", "quota", "partial"])
+def test_incomplete_run_preserves_the_first_backfill_window(root, initial_mode):
+    write_profile(root, '[[query]]\nname="alpha"\nany_of=["control"]\nsince_years=7\n')
+    today = date(2026, 10, 21)
+
+    class PartialClient(SyncClient):
+        def get_bytes(self, url, **kwargs):
+            if kwargs.get("source") == "arxiv":
+                self.requests += 1
+                raise service.SourceError("arxiv", "503 临时失败", True)
+            return super().get_bytes(url, **kwargs)
+
+    client = PartialClient() if initial_mode == "partial" else SyncClient(remaining="0.01")
+    first = service.run_sync(root, refresh="false" if initial_mode == "offline" else "true",
+                             client=client, today=today)
+    assert first.runs[0]["status"] == "ok", "有部分结果或显式离线仍可成功返回"
+    second = service.run_sync(root, refresh="auto", client=SyncClient(), today=today)
+    window = second.runs[0]["window"]
+    assert (today - date.fromisoformat(window["from"])).days == 7 * 365
+    assert second.runs[0]["counts"]["complete"] is True
+    third = service.run_sync(root, refresh="true", client=SyncClient(), today=today)
+    assert (today - date.fromisoformat(third.runs[0]["window"]["from"])).days == config.DEFAULT_LOOKBACK_DAYS
+
+
+def test_successful_empty_page_is_complete_and_cacheable(root):
+    class EmptyClient(SyncClient):
+        def get_bytes(self, url, **kwargs):
+            self.requests += 1
+            return HttpBytesResponse(url, 200, b'{"results": []}', {})
+
+    write_profile(root, '[[query]]\nname="alpha"\nany_of=["no match"]\n')
+    client = EmptyClient()
+    first = service.run_sync(root, refresh="true", sources=["openalex"], client=client)
+    assert first.runs[0]["counts"]["complete"] is True
+    assert first.runs[0]["counts"]["new_candidates"] == 0
+    second = service.run_sync(root, refresh="auto", sources=["openalex"], client=client)
+    assert second.runs[0]["refreshed"] is False and client.requests == 1
+
+
 def test_two_queries_with_the_same_spec_each_use_the_ledger(root, capsys, monkeypatch):
     """同一批次里 spec_hash 相同的两条查询，后一条会命中前一条刚写的账本（ADR-0066 决策 7）。"""
     write_profile(root, TWO_QUERIES.replace('name   = "beta"', 'name   = "beta"').replace(

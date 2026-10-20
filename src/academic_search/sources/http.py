@@ -119,8 +119,10 @@ class HttpClient:
         self._throttle(source)
         request = urllib.request.Request(url, headers=dict(headers or {}))
         request.add_header("User-Agent", self.user_agent)
+        self.requests += 1
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                self._record_cost(dict(response.headers))
                 content = response.read() if max_bytes is None else response.read(max_bytes + 1)
                 if max_bytes is not None and len(content) > max_bytes:
                     raise SourceError(
@@ -128,13 +130,12 @@ class HttpClient:
                     )
                 result = HttpBytesResponse(url, response.status, content, dict(response.headers))
         except urllib.error.HTTPError as exc:
+            self._record_cost(dict(exc.headers or {}))
             if raise_on_error:
                 raise self._classify(source, exc) from exc
             result = HttpBytesResponse(url, exc.code, exc.read() or b"", dict(exc.headers or {}))
         except urllib.error.URLError as exc:
             raise SourceError(source or "http", "网络不可达：" + str(exc.reason), True) from exc
-        self.requests += 1
-        self._record_cost(result.headers)
         return result
 
     def _throttle(self, source: str) -> None:
@@ -157,7 +158,7 @@ class HttpClient:
             except ValueError:
                 pass
         remaining = headers.get("x-ratelimit-remaining-usd")
-        if remaining:
+        if remaining is not None:
             try:
                 self.rate_remaining_usd = float(remaining)
             except ValueError:

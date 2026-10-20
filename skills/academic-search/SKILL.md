@@ -70,7 +70,7 @@ stdout 是 JSON 信封 `{ok, command, schema, data|error}`，日志走 stderr。
 
 - **本地未命中**：只说明现有语料未命中。用户需要外部文献且允许联网时，用 `search --refresh auto` 取数；已经联网仍空时，说明本次来源与检索式未找到匹配，不能推断“无人研究”，也不凭记忆补成已查证结果。
 - **列表少于预期**：读 `data.counts.local`；`truncated` 表示候选预算耗尽，`venue_filtered_out` 表示文本命中但载体不符，`matched` 与 `returned` 区分匹配数和展示数。`data.items` 查的是本地库，条数不等于本次新增数。
-- **部分源失败**：`counts.failures[]` 非空时仍可能 `ok=true`，使用成功结果并说明缺失来源，不能把失败或跳过的来源报告成已完成检索。
+- **部分源失败**：`counts.failures[]` 非空时仍可能 `ok=true`，使用成功结果并说明缺失来源；`search` / `sync` 的 `counts.complete` 表示本次规定的采集是否完成，细则见 CLI 参考 §8，不能把失败或跳过的来源报告成已完成检索。
 - **`degraded`**：读 `reason` 并结合 `network`、`cost.requests`；`sync` 看各 `runs[].refreshed`、状态与成本。新鲜度命中是正常复用，只需说明本次未刷新；额度不足可能整次跳过，也可能已经完成部分来源。不要统一说“只查本地”，也不要因该标记重复请求或绕过额度限制。
 - **`ok=false`**：仅 `busy`、`source_error`、`network_error`、`rate_limited` 在原因允许恢复时最多重试一次；缺依赖、错误参数等确定性问题先修原因。`data_not_writable` 需换可写根目录，重复执行无用。错误码细节见 CLI 参考 §10。
 

@@ -15,7 +15,7 @@
 | `--author 名` | — | 可重复，也可一次给多个值 |
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
 | `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，本地再过候选预算与结构化过滤，所以 `--limit 5` 之后池子里仍可能多出很多条，而返回条数也可能**少于** `--limit`（过滤太挑或候选预算用尽）。看 `counts.local` 的 `considered/matched/returned/truncated` 解释这个差 |
-| `--source 源` | `sources.toml` 里启用的（当前 `openalex`、`arxiv`） | 可重复；只在启用集内收窄。**不在集合里的名字被静默丢掉**——实测 `--source crossref`、`--source nosuch` 都等于不过滤。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
+| `--source 源` | `sources.toml` 里启用的采集源 | 可重复；只在启用的 `openalex` / `arxiv` 内收窄，同名来源去重。未知、不支持或禁用的来源（如 `nosuch` / `crossref`）、没有启用任何采集源均报 `invalid_args`。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
 | `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §6 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
 | `--in meta\|body\|both` | `meta` | `meta` = 只查标题/摘要；`body` = **只**扫 `works/` 下的 `paper.md`（`--refresh auto` 时不采集——正文只在本地；显式 `true` 仍照字面刷新元数据）；`both` = 两路并集。还没有生成过正文时 `body` 一条都不回 |
@@ -61,7 +61,7 @@ scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limi
 **坑（实测）：**
 
 - **不给检索式 = 列本地库全部**：空检索式跳过 FTS 过滤，返回本地所有 `live` work（条数受 `--limit` 限制）。**这一档只配 `--refresh false`**；配 `auto` / `true` 等于拿空检索式去联网。
-- **不要给空关键词**：`--all-of ""` 实测 `ok=false`、`error.code=internal_error`（FTS5 语法错误）。要列全部就别带这个词。
+- **不要给空值**：`--all-of` / `--any-of` / `--author` / `--venue` 的空字符串或全空白值报 `invalid_args`。要列全部就别给检索词，并配 `--refresh false`。
 - `--limit` 数的是 **work**，不是 record：一篇由 arXiv + OpenAlex 两条记录合成的只算 1。
 - **返回条数少于 `--limit` 时先看 `counts.local`**，不要凭感觉补：`considered` 是候选预算内看了多少 work、`matched` 是过滤后 `--limit` 前有多少、`truncated` 表示预算用尽（可能还有没看的匹配）、`venue_filtered_out` 是文本命中但载体被判据滤掉的 work 数。本地检索是**在全库上**过的，与本次远端取了多少条没有减法关系。
 - **`--venue` 只匹配已入库记录，且只认 OpenAlex 的载体指派**。经典论文常常只有预印本记录（`work_carriers` 里没有该会的 source id），于是被白名单 fail-closed 滤掉，`counts.local.venue_filtered_out` 会把它数出来。实测 Ha & Schmidhuber 2018 的 `World Models`：库里只有 arXiv 记录，OpenAlex 对应的 NeurIPS 版标题是 `Recurrent World Models Facilitate Policy Evolution`、且 `locations` 里**只有 arXiv**——`--venue NeurIPS` 查不到它不是本地漏采，是上游没有这个载体。→ 用 venue 找经典要叠加 `--sort citations`（默认按日期只取最新一页），并预期仍可能漏；漏了就改用主题词查。
@@ -184,12 +184,12 @@ scripts/run.cmd sync --refresh false
 
 **窗口**：每次现算，上界恒为今天。
 
-- **首次执行**（该 `query_name` 在账本里还没有 `status = 'ok'` 的行）用**它自己的** `since_years`；跑过之后一律用 `config/search.toml` 的 `sync.lookback_days`（默认 30）。画像里后来新加的方向因此能各自回溯，不会永远只有 30 天。
+- **首次回溯**：该 `query_name` 尚无完整联网采集记录时，用**它自己的** `since_years`；完成后用 `config/search.toml` 的 `sync.lookback_days`（默认 30）。离线、部分失败与额度中断不会消耗首次窗口；完整性判据见 §8。
 - 上界不拿「本次实际取到的最大 `publication_date`」回填——窗口是**请求的口径**，用取到的结果当上界会让「这次取到哪一年」悄悄改变下一次的窗口。
 
 **与 `search` 共用一本账**（`docs/决策/ADR-0049.md`、`docs/决策/ADR-0066.md`）：判据是 `spec_hash`，不是命令名。某条查询刚被一次字段等价的 `search` 刷过，`sync` 也会跳过它——这是账本判据的直接结果，不是故障。要补漏就给 `--refresh true`。
 
-**额度**：`config/search.toml` 的 `quota.min_remaining_usd`（默认 `0.05`）。OpenAlex 的响应带回剩余额度，**低于它就不再发后续请求**，等价 `--refresh false`，并进 `degraded.reason`。一次 `sync` 共用一个客户端，所以前一条查询读到的余额会拦住后一条。
+**额度**：`search` 与 `sync` 都使用 `config/search.toml` 的 `quota.min_remaining_usd`（默认 `0.05`）。OpenAlex 的成功或 HTTP 错误响应带回剩余额度，**低于它就不再发后续请求**，`degraded.reason` 说明整次跳过或部分完成。一次 `sync` 共用一个客户端，所以前一条查询读到的余额会拦住后一条。
 
 ---
 
@@ -217,7 +217,7 @@ scripts/run.cmd sync --refresh false
 | `true` | **先刷新，再查库**——三条命令同义。`lookup` 在本地已命中时也会刷 |
 | `false` | **绝不联网**，只读本地库 |
 
-`search` 的判据是**检索式**，不是全局时间：换个关键词就是另一次检索。只有**会改变远端请求**的参数参与判定——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--abstract` / `--in` 不参与，所以换个 `--limit` 仍算同一次检索、不会重新联网。只有**真正联网成功过**的那次才算「新鲜」，所以离线查询不会把 `auto` 锁死。
+`search` 的判据是**检索式**，不是全局时间：换个关键词就是另一次检索。只有**会改变远端请求**的参数参与判定——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--abstract` / `--in` 不参与，所以换个 `--limit` 仍算同一次检索。新鲜度要求完整采集记录（§8）：离线和部分成功本身不使检索式变新鲜；历史行缺少完整性标记时保留语料，后续按需重新采集。
 
 `sync` 用的是 `search` 那本新鲜度账，判据同为 `spec_hash`（`docs/决策/ADR-0066.md` 决策 7）。一次 `sync` 里若两条查询字段等价，后一条会命中前一条刚写的账而跳过——这是账本判据的直接结果，不额外去重。
 
@@ -249,7 +249,9 @@ scripts/run.cmd sync --refresh false
 | `is_retracted` | 撤稿，不要推荐 |
 | `dup_suspect` | 疑似同一篇但**未合并**，引用时必须说明 |
 
-`data` 除 `items` 外：`network`（本次是否发过请求）、`cost`（`{usd, basis, requests}`）；`counts`（`search` 恒有，`lookup` 只在刷新时）——`counts.local` 是本地漏斗 `{considered, matched, returned, truncated, venue_filtered_out}`，用来解释「为什么返回条数少于 `--limit`」；本次联网刷新过时另有 `new_candidates` / `dedup_blocked` / `by_source` / `failures`。
+`data` 除 `items` 外：`network`（本次是否发过请求）、`cost`（`{usd, basis, requests}`，含失败请求）；`counts`（`search` 恒有，`lookup` 只在刷新时）——`counts.local` 是本地漏斗 `{considered, matched, returned, truncated, venue_filtered_out}`，用来解释「为什么返回条数少于 `--limit`」。`search` 进入采集流程时另有 `new_candidates` / `dedup_blocked` / `by_source` / `failures` / `complete`，即使全部来源被条件排除也保留这些字段，此时 `network=false`、`complete=false`。
+
+**`counts.complete`（`search` / `sync`）**：实际发起请求、未被条件排除的来源均成功完成规定的一页、且未因额度停止时为 `true`；成功空页也算完成。这不是远端全库覆盖率。只有 `status=ok`、`refreshed=true`、`requests>0` 且此标记为真的账本行可证明新鲜度或首次回溯完成。离线与新鲜度跳过的账本 `counts={}`；`lookup` 不带此标记。部分成功后若没有完整采集依据，下次 `auto` 会重查整条检索式，逐源补查尚未实现。
 
 **摘要按需出现，不是每次都有**：`lookup` 固定带**完整**摘要；`search` 要打开 `--abstract` 才带，且是截断到 `abstract.chars` 的片段；不开时条目里**没有这个键**（不是 `null`），解析时按可缺席处理。
 

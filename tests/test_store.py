@@ -258,3 +258,14 @@ def test_search_fts_applies_filters_before_the_limit(conn):
     ) == ["r2"]
     assert len(store.search_fts(conn, '"alpha"', -1)) == 2
 
+
+@pytest.mark.parametrize("counts", [None, {}, {"complete": False}])
+def test_unproven_refresh_is_not_a_freshness_or_backfill_record(conn, counts):
+    with store.write_tx(conn):
+        run_id = store.start_run(conn, spec_hash="probe", query_name="alpha", refreshed=True,
+                                 window_from=None, window_to=None)
+        store.finish_run(conn, run_id, status="ok", requests=1, cost_usd=0,
+                         cost_basis=None, counts=counts)
+    assert store.last_refresh_at(conn, "probe") is None
+    assert store.has_successful_query(conn, "alpha") is False
+
