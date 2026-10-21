@@ -12,16 +12,16 @@
 | `--all-of 词` | — | 可重复，也可一次给多个值（`--all-of a b`）；组内 **AND**（交集） |
 | `--any-of 词` | — | 可重复，也可一次给多个值（`--any-of a b c`）；组内 **OR**（并集） |
 | `--venue 名` | — | 可重复，也可一次给多个值。写**载体名**（会议或期刊都行，如 `ICRA` / `NeurIPS` / `IEEE T-RO` / `JAAMAS`）；**全称与别名也认**（`IEEE Robotics and Automation Letters` = `RA-L`，大小写与连字符不敏感）。名字由 `src/academic_search/venues.toml` 解析成 OpenAlex source id；**解析不到就报错**（`invalid_args`），也可直写 `S…`。判据是「作品的载体 source id 集合 ∩ 名单 ≠ ∅」，**`venue` 字符串不参与判定**。给了白名单时 **arXiv 那一腿不参与**（arXiv 没有载体概念），它在 `counts.by_source` 里记 0。**它只匹配已入库记录，且只认 OpenAlex 的载体指派**——经典论文常常只有预印本记录、或上游没给正式载体（实测 Ha & Schmidhuber 2018 的 NeurIPS 版在 OpenAlex 里只有 arXiv 载体），所以「用 venue 找某会经典」会漏；见下面的坑 |
-| `--author 名` | — | 可重复，也可一次给多个值 |
+| `--author 名` | — | 可重复，也可一次给多个值；任一作者满足即可（OR），与其他条件取 AND |
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
 | `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，本地再过候选预算与结构化过滤，所以 `--limit 5` 之后池子里仍可能多出很多条，而返回条数也可能**少于** `--limit`（过滤太挑或候选预算用尽）。看 `counts.local` 的 `considered/matched/returned/truncated` 解释这个差 |
 | `--source 源` | `sources.toml` 里启用的采集源 | 可重复；只在启用的 `openalex` / `arxiv` 内收窄，同名来源去重。未知、不支持或禁用的来源（如 `nosuch` / `crossref`）、没有启用任何采集源均报 `invalid_args`。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
 | `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §6 |
-| `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效 |
+| `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效；正数支持小数，负数与非有限值报 `invalid_args`；`0` 当前沿用配置时长 |
 | `--in meta\|body\|both` | `meta` | `meta` = 只查标题/摘要；`body` = **只**扫 `works/` 下的 `paper.md`（`--refresh auto` 时不采集——正文只在本地；显式 `true` 仍照字面刷新元数据）；`both` = 两路并集。还没有生成过正文时 `body` 一条都不回 |
 | `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档是两次不同的请求，各抓一次，因此换档会联网、也各算一次检索。注意它排的是**全局**被引，见下面的坑 |
-| `--min-citations N` | 关闭 | 原始被引下限：远端下发 `filter=cited_by_count:>N`，本地按同一条件再判一次，**`cited_by_count` 为空即不通过**；给了它就**跳过 arXiv 腿**（那边没有被引数据）。与主题条件是**与**关系，叠加不额外计费 |
-| `--min-fwci X` | 关闭 | 领域归一化被引下限，同上（`filter=fwci:>X`）；与 `--min-citations` 同时给出时**取与**。**覆盖不完整**：很新的论文与部分类型没有该值，而空值不通过 → 它偏向**有一定年头**的文献，见下面的坑 |
+| `--min-citations N` | 关闭 | 原始被引下限，包含等于（`>= N`）：远端下发 `filter=cited_by_count:N-`，本地同判；N 为非负整数，**值为空不通过**；给了它就**跳过 arXiv 腿**。与主题条件取与，叠加不额外计费 |
+| `--min-fwci X` | 关闭 | 领域归一化被引下限，包含等于（`>= X`），远端为 `filter=fwci:X-`；X 必须是有限非负数，与 `--min-citations` 同时给出时**取与**。**覆盖不完整**：很新的论文与部分类型没有该值，而空值不通过，因此偏向有一定年头的文献 |
 | `--abstract` | 关闭（布尔开关） | 打开时每条附上摘要，截断到 `config/search.toml` 的 `abstract.chars`（默认 800）个字符。**不参与新鲜度判定**：同一检索式开了它也算同一次检索。`lookup` 不受它约束——`lookup` 固定带完整摘要 |
 
 **用法清单（每条都实测过）：**
@@ -57,6 +57,11 @@ scripts/run.cmd search --any-of "world model" --min-citations 100 --sort citatio
 # h) 按载体筛：远端走 source id、本地走载体集合（实测 ICRA 一次取回 100 条）
 scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limit 5
 ```
+
+**离线回归确认：**
+
+- **过滤语义的缓存兼容**：带作者或引用阈值的查询使用明确包含 OR / 下界语义的身份，已有较窄采集记录不会使它们变新鲜，首次使用可能重新联网；已有语料保留。这是查询身份处理，不是数据库迁移。
+- **正文布尔条件**：`all-of`、`any-of` 的组合在单份 Markdown 内判断，不跨文件拼接；`both` 合并元数据命中与正文命中，仍是两路并集。
 
 **坑（实测）：**
 
@@ -184,7 +189,7 @@ scripts/run.cmd sync --refresh false
 
 **窗口**：每次现算，上界恒为今天。
 
-- **首次回溯**：该 `query_name` 尚无完整联网采集记录时，用**它自己的** `since_years`；完成后用 `config/search.toml` 的 `sync.lookback_days`（默认 30）。离线、部分失败与额度中断不会消耗首次窗口；完整性判据见 §8。
+- **首次回溯**：查询名与当前 `spec_hash` 尚无完整联网采集记录时，用**它自己的** `since_years`；完成后用 `config/search.toml` 的 `sync.lookback_days`（默认 30）。同名查询改变条件或来源时重新回溯；离线、部分失败与额度中断不会消耗首次窗口；完整性判据见 §8。
 - 上界不拿「本次实际取到的最大 `publication_date`」回填——窗口是**请求的口径**，用取到的结果当上界会让「这次取到哪一年」悄悄改变下一次的窗口。
 
 **与 `search` 共用一本账**（`docs/决策/ADR-0049.md`、`docs/决策/ADR-0066.md`）：判据是 `spec_hash`，不是命令名。某条查询刚被一次字段等价的 `search` 刷过，`sync` 也会跳过它——这是账本判据的直接结果，不是故障。要补漏就给 `--refresh true`。

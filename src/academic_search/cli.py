@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 from pathlib import Path
@@ -94,6 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
 def _dispatch(args, name: str):
     root = resolve_root(args.root)
     if name == "search":
+        for option, value in (("--max-age", args.max_age), ("--min-fwci", args.min_fwci)):
+            if value is not None and (not math.isfinite(value) or value < 0):
+                raise envelope.EnvelopeError(
+                    envelope.INVALID_ARGS, option + " 必须是有限的非负数",
+                )
+        if args.min_citations is not None and args.min_citations < 0:
+            raise envelope.EnvelopeError(envelope.INVALID_ARGS, "--min-citations 必须是非负整数")
         cfg = config.load_search(root)
         enabled = config.load_sources(root)
         requested = list(args.source) if args.source else config.active_sources(enabled)
@@ -121,7 +129,7 @@ def _dispatch(args, name: str):
         )
         outcome = service.run_search(
             root, spec, limit=args.limit, sources=sources, refresh=args.refresh,
-            max_age_hours=int(args.max_age) if args.max_age else cfg.max_age_hours,
+            max_age_hours=args.max_age if args.max_age else cfg.max_age_hours,
             sort=args.sort, in_scope=args.in_scope, venue_blacklist=cfg.venue_blacklist,
             abstract=args.abstract, abstract_chars=cfg.abstract_chars,
             max_candidates=cfg.local_max_candidates,

@@ -50,3 +50,10 @@ def real_pandoc() -> str:
     if not path:
         pytest.skip("本机没有可用的 pandoc")
     return path
+
+
+@pytest.fixture(autouse=True)
+def offline_openalex_key(request, monkeypatch):
+    """离线用例只用假 key，防止失败断言输出用户真实凭据。"""
+    if request.node.get_closest_marker("live") is None:
+        monkeypatch.setenv("OPENALEX_API_KEY", "offline-test-key")

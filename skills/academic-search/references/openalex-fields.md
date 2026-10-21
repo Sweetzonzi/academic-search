@@ -44,9 +44,9 @@
 | `--all-of x`（可重复） | `search.title_and_abstract=("x1" AND "x2")`——每个值加双引号，值里的 `"` 被剥掉 |
 | `--any-of a b` | 同上，组内用 ` OR `；两组之间 ` AND `。如 `("world model") AND ("drone" OR "UAV")` |
 | `--venue V` | `filter=locations.source.id:<S-id>`——会名先由 `src/academic_search/venues.toml` 登记表解析；**解析不到即报错**，也可直写 `S…` |
-| `--author A` | `filter=raw_author_name.search:A` |
+| `--author A B` | 单个 `filter=raw_author_name.search:"A" OR "B"`，姓名短语取 OR |
 | `--since-years N` | `filter=from_publication_date:<今天-N 年>` + `to_publication_date:<今天>` |
-| `--min-citations N` / `--min-fwci X` | `filter=cited_by_count:>N` / `fwci:>X`（叠加不额外计费；两个同时给出取与） |
+| `--min-citations N` / `--min-fwci X` | `filter=cited_by_count:N-` / `fwci:X-`，包含下界；两个同时给出取与 |
 | `--sort date` / `--sort citations` | `sort=publication_date:desc` / `cited_by_count:desc`，**总是显式下发** |
 
 - **一次取数固定一页 100 条**（`per_page=100`），`--limit` 只截断展示——计费按次不按条，取少不省钱。

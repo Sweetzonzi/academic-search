@@ -82,18 +82,21 @@ title: "设计决策索引"
 | [ADR-0054](ADR-0054.md) | 派生文本的通道与键 | `digest put` 改批量 JSON；kind 含粒度；新增译名表 `config/terms.toml` 并把 `glossary_version` 更名 `terms_version`；content_hash 细则写死 | accepted |
 | [ADR-0055](ADR-0055.md) | 运行留档与运行环境 | 留档合并为 `data/runs/<run_id>/`；宿主只装薄 bundle；`vendor/` 装 pandoc；回看 30 天；锁冲突即 `busy`；库内 UTC、报告本地时区 | accepted |
 | [ADR-0056](ADR-0056.md) | 契约补口 | `sync` 的 `data` 是 `run.json` 真子集；三个检索命令都落候选池、`query_name` 匿名即 NULL；主 `.tex` 按 `\documentclass` 判定、PDF 图 `pdftocairo`→PyMuPDF 降级且渲染器进 `converter_version`；`digest put` 不收回传 hash；部分失败不改变退出码 | accepted |
-| [ADR-0057](ADR-0057.md) | 检索载荷的粒度 | `search` / `lookup` 条目只保证可溯源最小集，摘要与正文不进载荷；不做分页/计数，全库规模由 `--limit` 兜住 | partially superseded by ADR-0058 |
+| [ADR-0057](ADR-0057.md) | 检索载荷的粒度 | 可溯源最小集与正文通道；摘要见 ADR-0058，本地分页见 ADR-0073 | partially superseded by ADR-0058, ADR-0073 |
 | [ADR-0058](ADR-0058.md) | 摘要按需带出 | `lookup` 固定带完整摘要；`search` 新增 `--abstract`（默认关闭）带截断版，长度由 `search.toml` 的 `abstract.chars` 控制；多来源摘要按「版本层级 → 文本保真度」两级取值 | partially superseded by ADR-0059, ADR-0062 |
 | [ADR-0059](ADR-0059.md) | 摘要截断默认值 | `search --abstract` 的 `[abstract] chars` 默认从 240 调到 800；契约措辞与 ADR-0058 其余决策不变 | accepted |
 | [ADR-0060](ADR-0060.md) | venue 判据 | 白名单与黑名单共用「载体 source id 集合 ∩ 名单 ≠ ∅」；会名到 S-id 的登记表随代码进版本库；远端改用 `locations.source.id:`，给定白名单时跳过 arXiv 腿 | accepted |
-| [ADR-0061](ADR-0061.md) | 找经典的阈值 | 新增 `--min-citations` 与 `--min-fwci`（同时给出取与）；远端 filter + 本地同条件、空值不通过；`--sort citations` 保持展示排序 | partially superseded by ADR-0062 |
+| [ADR-0061](ADR-0061.md) | 找经典的阈值 | 两个引用指标、空值策略与源能力限制；现行排序见 ADR-0062，下界见 ADR-0071 | partially superseded by ADR-0062, ADR-0071 |
 | [ADR-0062](ADR-0062.md) | `spec_hash` 的口径与取数页大小 | `spec_hash` = 远端请求的声明式参数（含 `--source` / `--sort` / 两个阈值）；解析后的日期与 `--limit` / `--abstract` / `--in` 不进；取数固定一页 100 条，`--limit` 只管展示 | accepted |
 | [ADR-0063](ADR-0063.md) | 检索门 | 主题条件改用 `search.title_and_abstract=` 的单个布尔串；每个值一律加引号（因此不需要转义层）；结构化条件继续走 `filter=` | accepted |
 | [ADR-0064](ADR-0064.md) | L1 补桥 | 桥是「声明」不是「标识」：`record_ident` 区分 `ident` / `bridge`，桥可被真正的持有者接管；校验落在 `ingest()` 的 L1 分支且归组前做 | accepted |
 | [ADR-0065](ADR-0065.md) | `lookup` 的刷新语义 | 两条命令的 `--refresh` 三档同义：`true` 无条件先刷再查本地、`auto` 未命中才联网、`false` 绝不联网；`--title` 在 `true` 下降级为只查本地并标注 | accepted |
-| [ADR-0066](ADR-0066.md) | `sync` 的运行粒度与产物形状 | 一条具名查询 = 一行 `run`（不改表）；`run.json` 收敛为单数并装「新发表 / 新发现」两栏；stdout 逐 run 自包含、不设调用级合计；报告每条 run 一份、`latest-report.md` 为调用汇总；另定刷新档位、查询解析、窗口与首次执行、响应留档与额度阈值；删「水位」术语与 `last_success_watermark` 列 | accepted |
+| [ADR-0066](ADR-0066.md) | `sync` 的运行粒度与产物形状 | 一条具名查询 = 一行 `run`（不改表）；`run.json` 收敛为单数并装「新发表 / 新发现」两栏；stdout 逐 run 自包含、不设调用级合计；报告每条 run 一份、`latest-report.md` 为调用汇总；另定刷新档位、查询解析、窗口与首次执行、响应留档与额度阈值；删「水位」术语与 `last_success_watermark` 列 | partially superseded by ADR-0072 |
 | [ADR-0068](ADR-0068.md) | `works/` 目录名改为可读 | 投影目录名 = `<年>-<首作者>-<标题>-<work_key>`，**尾段恒为 20 位 `work_key`**（唯一可反解的身份段）；`download` / `read` 写盘前对账改名、合并后的空壳目录清掉；`bytes/` 仍是哈希 | accepted |
 | [ADR-0067](ADR-0067.md) | 全文入口按产物拆分 | `download` 取原始字节、`read` 懒物化文本，取消 `textify` 命令；`record.source_version` 随元数据刷新写入（为空时 `download` 补一次），缓存判据 = 版本相等；`artifact` 增版本与 HTTP 验证器列，`artifact.kind` 增 `source_html`/`source_pdf` | accepted |
 | [ADR-0069](ADR-0069.md) | 数据目录不可写先报 `data_not_writable` | 连库前在 `data/` 做写探针；SQLite 的 `unable to open database file` / `readonly database` 映射到同一错误码并带路径与修法；只读根不支持「可读不可写」降级 | accepted |
 | [ADR-0070](ADR-0070.md) | 本地候选预算与 `counts.local` | 硬编码 500 换成 `[local] max_candidates`（默认 5000，0=不限）；`status`/`--source`/日期窗下推到 FTS 的 `LIMIT` 之前；`counts.local` 恒带 `considered/matched/returned/truncated/venue_filtered_out` | accepted |
+| [ADR-0071](ADR-0071.md) | 引用阈值包含下界 | 计数与 FWCI 均按 `>=`；远端使用开放区间，带阈值的查询身份标明包含下界 | accepted |
+| [ADR-0072](ADR-0072.md) | 作者白名单按 OR 匹配 | 任一作者满足即通过，远端按 OR 组合；同名查询的回溯完成判据同时匹配当前检索式 | accepted |
+| [ADR-0073](ADR-0073.md) | 本地结果分页 | `search` 按 offset / limit 分段展示已过滤排序的 work；偏移不进取数缓存身份，远端采集策略单独决策 | accepted |
 

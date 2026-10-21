@@ -85,11 +85,25 @@ def test_openalex_build_filter_is_structured_only():
     )
     assert value == (
         "locations.source.id:S4210217939,"
-        "raw_author_name.search:Doe,"
+        'raw_author_name.search:"Doe",'
         "from_publication_date:2024-01-01,"
-        "cited_by_count:>100,"
-        "fwci:>2.5"
+        "cited_by_count:100-,"
+        "fwci:2.5-"
     )
+
+
+def test_openalex_authors_are_one_or_group():
+    value = openalex.build_filter(
+        SearchSpec(all_of=["decision"], authors=["Jane Doe", "Alice Smith"]),
+        from_date="2024-01-01", to_date=None,
+    )
+    assert value == ('raw_author_name.search:"Jane Doe" OR "Alice Smith",'
+                     'from_publication_date:2024-01-01')
+
+
+def test_openalex_fwci_lower_bound_uses_decimal_not_epsilon():
+    value = openalex.build_filter(SearchSpec(min_fwci=0.00001), from_date=None, to_date=None)
+    assert value == "fwci:0.00001-"
 
 
 def test_openalex_build_filter_refuses_unresolved_venue():
@@ -190,6 +204,13 @@ def test_arxiv_search_query_omits_degenerate_date_bounds():
         SearchSpec(all_of=["world model"]), from_date="2024-01-01", to_date=None
     )
     assert only_lower.endswith("AND submittedDate:[202401010000 TO 999912312359]")
+
+
+def test_arxiv_authors_are_ored_and_grouped_with_other_conditions():
+    query = arxiv.build_search_query(
+        SearchSpec(all_of=["decision"], authors=["Jane Doe", "Alice Smith"]),
+    )
+    assert query == 'abs:"decision" AND (au:"Jane Doe" OR au:"Alice Smith")'
 
 
 def test_crossref_lookup_parses_real_fixture():

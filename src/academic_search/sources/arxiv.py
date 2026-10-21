@@ -35,8 +35,9 @@ def build_search_query(
         parts.append('abs:"' + keyword + '"')
     if spec.any_of:
         parts.append("(" + " OR ".join('abs:"' + k + '"' for k in spec.any_of) + ")")
-    for author in spec.authors:
-        parts.append('au:"' + author + '"')
+    authors = ['au:"' + author + '"' for author in spec.authors if author.strip()]
+    if authors:
+        parts.append(authors[0] if len(authors) == 1 else "(" + " OR ".join(authors) + ")")
     # 日期子句只在**有下界**时下发。实测：arXiv 对退化的边界值（000000000000、*、
     # 999999999999）一律回 HTTP 500，而只有上界等于没有过滤（论文都在过去）。
     if from_date:

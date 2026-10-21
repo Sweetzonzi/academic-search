@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import re
 from typing import Iterable
 
@@ -202,16 +204,17 @@ def build_filter(
     ids = [str(v).strip() for v in venue_ids if str(v).strip()]
     if ids:
         parts.append("locations.source.id:" + "|".join(ids))
-    for author in spec.authors:
-        parts.append("raw_author_name.search:" + author)
+    authors = [_quote(author) for author in spec.authors if author.strip()]
+    if authors:
+        parts.append("raw_author_name.search:" + " OR ".join(authors))
     if from_date:
         parts.append("from_publication_date:" + from_date)
     if to_date:
         parts.append("to_publication_date:" + to_date)
     if spec.min_citations is not None:
-        parts.append("cited_by_count:>" + str(int(spec.min_citations)))
+        parts.append("cited_by_count:" + str(int(spec.min_citations)) + "-")
     if spec.min_fwci is not None:
-        parts.append("fwci:>" + str(spec.min_fwci))
+        parts.append("fwci:" + format(Decimal(str(spec.min_fwci)), "f") + "-")
     return ",".join(parts)
 
 

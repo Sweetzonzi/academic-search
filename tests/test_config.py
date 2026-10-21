@@ -151,6 +151,14 @@ def test_canonical_spec_is_stable_json():
     assert '"all_of":["a","b"]' in value
 
 
+def test_queries_without_authors_or_thresholds_keep_their_canonical_identity():
+    assert config.canonical_spec(all_of=["a"], sources=["arxiv"], sort="date") == (
+        '{"all_of":["a"],"any_of":[],"authors":[],"from":null,"min_citations":null,'
+        '"min_fwci":null,"since_years":null,"sort":"date","sources":["arxiv"],'
+        '"to":null,"venues":[]}'
+    )
+
+
 def test_load_sources_defaults_and_override(tmp_path):
     enabled = config.load_sources(tmp_path)
     assert enabled["openalex"] is True

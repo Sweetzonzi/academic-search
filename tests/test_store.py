@@ -267,5 +267,5 @@ def test_unproven_refresh_is_not_a_freshness_or_backfill_record(conn, counts):
         store.finish_run(conn, run_id, status="ok", requests=1, cost_usd=0,
                          cost_basis=None, counts=counts)
     assert store.last_refresh_at(conn, "probe") is None
-    assert store.has_successful_query(conn, "alpha") is False
+    assert store.has_successful_query(conn, "alpha", "probe") is False
 

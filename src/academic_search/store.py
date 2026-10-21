@@ -241,13 +241,20 @@ def finish_run(
     )
 
 
-def _last_complete_refresh(conn: sqlite3.Connection, column: str, value: str) -> str | None:
+def _last_complete_refresh(
+    conn: sqlite3.Connection, column: str, value: str, *, spec_hash: str | None = None,
+) -> str | None:
     # column 只来自下面两个内部调用；值仍走 SQL 参数。
     assert column in {"spec_hash", "query_name"}
+    where = column + " = ?"
+    params = [value]
+    if spec_hash is not None:
+        where += " AND spec_hash = ?"
+        params.append(spec_hash)
     rows = conn.execute(
-        "SELECT started_at, counts FROM run WHERE " + column + " = ?"
+        "SELECT started_at, counts FROM run WHERE " + where +
         " AND refreshed = 1 AND requests > 0 AND status = 'ok' ORDER BY run_id DESC",
-        (value,),
+        params,
     )
     for row in rows:
         counts = json.loads(row["counts"] or "{}")
@@ -262,9 +269,9 @@ def last_refresh_at(conn: sqlite3.Connection, spec_hash: str) -> str | None:
     return _last_complete_refresh(conn, "spec_hash", spec_hash)
 
 
-def has_successful_query(conn: sqlite3.Connection, query_name: str) -> bool:
-    """该具名查询是否已完成一次完整联网采集；离线和部分采集不算。"""
-    return _last_complete_refresh(conn, "query_name", query_name) is not None
+def has_successful_query(conn: sqlite3.Connection, query_name: str, spec_hash: str) -> bool:
+    """该具名查询的当前检索式是否已完整联网采集；离线和部分采集不算。"""
+    return _last_complete_refresh(conn, "query_name", query_name, spec_hash=spec_hash) is not None
 
 
 def candidates_first_seen_in_run(conn: sqlite3.Connection, run_id: int) -> list[str]:

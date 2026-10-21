@@ -280,6 +280,34 @@ def test_first_execution_uses_since_years_then_lookback(root, capsys, monkeypatc
     assert span == config.DEFAULT_LOOKBACK_DAYS
 
 
+def test_author_semantics_change_requires_backfill_for_current_query(root):
+    write_profile(root, '[[query]]\nname="alpha"\nall_of=["attention"]\n'
+                        'authors=["Sutton", "Littman"]\nsince_years=7\n')
+    today = date(2026, 10, 21)
+    first = service.run_sync(root, refresh="true", sources=["openalex"],
+                             client=SyncClient(), today=today)
+    assert first.runs[0]["counts"]["complete"] is True
+    legacy = json.loads(config.canonical_spec(
+        all_of=["attention"], authors=["Sutton", "Littman"], since_years=7,
+        sources=["openalex"], sort="date",
+    ))
+    legacy.pop("author_match", None)
+    legacy_hash = hashlib.sha256(json.dumps(legacy, ensure_ascii=False, sort_keys=True,
+                                           separators=(",", ":")).encode("utf-8")).hexdigest()
+    conn = store.connect(config.db_path(root))
+    with store.write_tx(conn):
+        conn.execute("UPDATE run SET spec_hash = ?", (legacy_hash,))
+    conn.close()
+    second = service.run_sync(root, refresh="auto", sources=["openalex"],
+                              client=SyncClient(), today=today)
+    entry = second.runs[0]
+    assert entry["refreshed"] is True
+    assert (today - date.fromisoformat(entry["window"]["from"])).days == 7 * 365
+    third = service.run_sync(root, refresh="true", sources=["openalex"],
+                             client=SyncClient(), today=today)
+    assert (today - date.fromisoformat(third.runs[0]["window"]["from"])).days == config.DEFAULT_LOOKBACK_DAYS
+
+
 @pytest.mark.parametrize("initial_mode", ["offline", "quota", "partial"])
 def test_incomplete_run_preserves_the_first_backfill_window(root, initial_mode):
     write_profile(root, '[[query]]\nname="alpha"\nany_of=["control"]\nsince_years=7\n')

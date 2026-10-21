@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -532,7 +534,7 @@ def test_min_citations_filters_and_skips_arxiv_leg(root, monkeypatch):
     assert outcome.counts["failures"] == []
     assert outcome.items and all(item["cited_by_count"] >= 1000 for item in outcome.items)
     url = [u for u in client.urls if "api.openalex.org/works" in u][0]
-    assert "cited_by_count%3A%3E1000" in url
+    assert "cited_by_count%3A1000-" in url
 
 
 def test_min_fwci_excludes_null_values(root, monkeypatch):
@@ -567,13 +569,14 @@ def test_both_thresholds_are_anded(root, monkeypatch):
 BODY_KEY = "abcdefghijklmnopqrst"
 
 
-def _insert_work(root, key, *, title, source="arxiv", source_id=None, body=None):
+def _insert_work(root, key, *, title, source="arxiv", source_id=None, body=None, **fields):
     """一条记录 + 一个 work；给了 body 就顺手写 `works/<proj>/paper.md`。"""
     conn = store.connect(config.db_path(root))
     with store.write_tx(conn):
         store.insert_record(conn, {
             "record_uid": key, "source": source, "source_id": source_id or key,
             "title": title, "abstract": title, "published_at": "2026-10-01",
+            **fields,
         })
         store.create_work(conn, key)
         store.add_member(conn, key, key, "primary")
@@ -625,6 +628,143 @@ def test_in_body_never_goes_online_on_auto(root, monkeypatch):
     )
     assert outcome.network is False
     assert [item["work_key"] for item in outcome.items] == [BODY_KEY]
+
+
+@pytest.mark.parametrize("in_scope", ["body", "both"])
+@pytest.mark.parametrize("all_of,any_of,body,matched", [
+    (["multi-agent", "task allocation"], [], "multi-agent", False),
+    (["multi-agent", "task allocation"], [], "MULTI-AGENT task allocation", True),
+    ([], ["UAV", "drone"], "a drone mission", True),
+    ([], ["UAV", "drone"], "a robot mission", False),
+    (["multi-agent"], ["UAV", "drone"], "multi-agent", False),
+    (["multi-agent"], ["UAV", "drone"], "a drone mission", False),
+    (["multi-agent"], ["UAV", "drone"], "multi-agent drone mission", True),
+])
+def test_body_search_honours_boolean_groups(root, in_scope, all_of, any_of, body, matched):
+    _insert_work(root, BODY_KEY, title="Body Probe", body=body)
+    outcome = service.run_search(
+        root, SearchSpec(all_of=all_of, any_of=any_of),
+        refresh="false", sources=["arxiv"], in_scope=in_scope,
+    )
+    assert [item["work_key"] for item in outcome.items] == ([BODY_KEY] if matched else [])
+
+
+def test_body_search_does_not_combine_conditions_across_files(root):
+    _insert_work(root, BODY_KEY, title="Body Probe", body="multi-agent")
+    supplement = root / "works" / ("2026-Doe-Probe-" + BODY_KEY) / "supplement.md"
+    supplement.write_text("task allocation", encoding="utf-8")
+    outcome = service.run_search(
+        root, SearchSpec(all_of=["multi-agent", "task allocation"]),
+        refresh="false", sources=["arxiv"], in_scope="body",
+    )
+    assert outcome.items == []
+
+
+@pytest.mark.parametrize("max_age,age_minutes,network", [
+    (None, 90, False),
+    (0.5, 15, False),
+    (0.5, 45, True),
+    (1.5, 75, False),
+    (1.5, 105, True),
+])
+def test_cli_max_age_uses_fractional_hours_in_refresh_gate(
+    root, capsys, monkeypatch, max_age, age_minutes, network,
+):
+    (root / "config/search.toml").write_text(
+        "[refresh]\nmax_age_hours=2\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(service, "make_client", FixtureClient)
+    query = ["--root", str(root), "search", "--any-of", "control", "--source", "openalex"]
+    assert cli.main([*query, "--refresh", "true"]) == 0
+    assert envelope_of(capsys)["data"]["network"] is True
+    later = datetime.now(timezone.utc) + timedelta(minutes=age_minutes)
+
+    class LaterClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return later.astimezone(tz)
+
+    monkeypatch.setattr(service, "datetime", LaterClock)
+    args = [*query, "--refresh", "auto"]
+    if max_age is not None:
+        args.append("--max-age=" + str(max_age))
+    assert cli.main(args) == 0
+    data = envelope_of(capsys)["data"]
+    assert data["network"] is network
+    assert data["cost"]["requests"] == int(network)
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf", "-inf"])
+def test_cli_rejects_invalid_max_age_before_opening_database(root, capsys, monkeypatch, value):
+    monkeypatch.setattr(service, "make_client", lambda: pytest.fail("无效时长不能联网"))
+    assert cli.main(["--root", str(root), "search", "--max-age=" + value,
+                     "--refresh", "false"]) == 1
+    error = envelope_of(capsys)["error"]
+    assert error["code"] == "invalid_args" and "--max-age" in error["message"]
+    assert not config.db_path(root).exists()
+
+
+@pytest.mark.parametrize("authors,matched", [
+    (["Jane Doe"], True), (["Alice Smith"], True),
+    (["Jane Doe", "Alice Smith"], True), (["Other Author"], False), ([], False),
+])
+def test_author_whitelist_matches_any_one_author(root, authors, matched):
+    _insert_work(root, BODY_KEY, title="Author Probe", authors=authors)
+    outcome = service.run_search(
+        root, SearchSpec(authors=["jane doe", "ALICE SMITH"]),
+        refresh="false", sources=["arxiv"],
+    )
+    assert [item["work_key"] for item in outcome.items] == ([BODY_KEY] if matched else [])
+
+
+def test_author_phrase_cannot_span_two_names(root):
+    _insert_work(root, BODY_KEY, title="Author Probe", authors=["Jane Doe", "Alice Smith"])
+    outcome = service.run_search(
+        root, SearchSpec(authors=["Doe Alice"]), refresh="false", sources=["arxiv"],
+    )
+    assert outcome.items == []
+
+
+@pytest.mark.parametrize("field,threshold", [("cited_by_count", 100), ("fwci", 2.5)])
+@pytest.mark.parametrize("delta,matched", [(-1, False), (0, True), (1, True), (None, False)])
+def test_citation_threshold_includes_equal_and_excludes_missing(root, field, threshold, delta, matched):
+    _insert_work(root, BODY_KEY, title="Threshold Probe", source="openalex",
+                 **{field: None if delta is None else threshold + delta})
+    spec = SearchSpec(**{"min_citations" if field == "cited_by_count" else "min_fwci": threshold})
+    outcome = service.run_search(root, spec, refresh="false", sources=["openalex"])
+    assert [item["work_key"] for item in outcome.items] == ([BODY_KEY] if matched else [])
+
+
+@pytest.mark.parametrize("option,value", [
+    ("--min-citations", "-1"), ("--min-fwci", "-1"),
+    ("--min-fwci", "nan"), ("--min-fwci", "inf"), ("--min-fwci", "-inf"),
+])
+def test_cli_rejects_invalid_thresholds_before_database(root, capsys, option, value):
+    assert cli.main(["--root", str(root), "search", option + "=" + value,
+                     "--refresh", "false"]) == 1
+    error = envelope_of(capsys)["error"]
+    assert error["code"] == "invalid_args" and option in error["message"]
+    assert not config.db_path(root).exists()
+
+
+@pytest.mark.parametrize("conditions", [
+    {"min_citations": 100}, {"min_fwci": 2.5}, {"authors": ["Sutton", "Littman"]},
+])
+def test_changed_filter_semantics_do_not_reuse_legacy_freshness(root, conditions):
+    spec = SearchSpec(any_of=["control"], **conditions)
+    service.run_search(root, spec, sources=["openalex"], refresh="true", client=FixtureClient())
+    canonical = json.loads(config.canonical_spec(any_of=spec.any_of, sources=["openalex"],
+                                                sort="date", **conditions))
+    canonical.pop("min_bounds", None)
+    canonical.pop("author_match", None)
+    legacy_hash = hashlib.sha256(json.dumps(canonical, ensure_ascii=False, sort_keys=True,
+                                           separators=(",", ":")).encode("utf-8")).hexdigest()
+    conn = store.connect(config.db_path(root))
+    with store.write_tx(conn):
+        conn.execute("UPDATE run SET spec_hash = ?", (legacy_hash,))
+    conn.close()
+    current = service.run_search(root, spec, sources=["openalex"], refresh="auto", client=FixtureClient())
+    assert current.network is True and current.requests == 1
 
 
 def test_any_of_accepts_several_values_after_one_flag(root, capsys):

@@ -349,20 +349,26 @@ def canonical_spec(
     def norm(values) -> list[str]:
         return sorted({str(v).strip().lower() for v in values if str(v).strip()})
 
+    normalized = {
+        "all_of": norm(all_of),
+        "any_of": norm(any_of),
+        "venues": norm(venues),
+        "authors": norm(authors),
+        "since_years": since_years,
+        "from": from_date,
+        "to": to_date,
+        "sources": norm(sources),
+        "sort": sort,
+        "min_citations": min_citations,
+        "min_fwci": min_fwci,
+    }
+    # 只使取数语义发生变化的查询失效；没有这些条件的 hash 保持稳定。
+    if normalized["authors"]:
+        normalized["author_match"] = "any"
+    if min_citations is not None or min_fwci is not None:
+        normalized["min_bounds"] = "inclusive"
     return json.dumps(
-        {
-            "all_of": norm(all_of),
-            "any_of": norm(any_of),
-            "venues": norm(venues),
-            "authors": norm(authors),
-            "since_years": since_years,
-            "from": from_date,
-            "to": to_date,
-            "sources": norm(sources),
-            "sort": sort,
-            "min_citations": min_citations,
-            "min_fwci": min_fwci,
-        },
+        normalized,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

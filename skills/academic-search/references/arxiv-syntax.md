@@ -46,7 +46,7 @@
 |---|---|
 | `--all-of x`（可重复） | `abs:"x"`，多个之间用 `AND` |
 | `--any-of a b` | `(abs:"a" OR abs:"b")` |
-| `--author A` | `au:"A"` |
+| `--author A B` | `(au:"A" OR au:"B")`；单作者为 `au:"A"` |
 | `--venue V` | **arXiv 侧无法表达载体条件**：arXiv 没有 venue 概念。给定白名单时这一腿**根本不参与**（在 `counts.by_source` 里记 0、不算失败），因为取回来也判不了 |
 | `--min-citations` / `--min-fwci` | 同上：arXiv 没有被引数据，给了任一条这一腿就不参与 |
 | `--since-years N` | `submittedDate:[(今天-N 年)0000 TO 今天2359]` |

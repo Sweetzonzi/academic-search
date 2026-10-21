@@ -60,7 +60,7 @@ def _api_key() -> str | None:
     return os.environ.get("OPENALEX_API_KEY") or None
 
 
-def _should_refresh(conn, spec_hash: str, mode: str, max_age_hours: int) -> bool:
+def _should_refresh(conn, spec_hash: str, mode: str, max_age_hours: float) -> bool:
     if mode == "false":
         return False
     if mode == "true":
@@ -155,14 +155,16 @@ def _fts_query(spec: SearchSpec) -> str:
 def _body_work_keys(conn, root, spec: SearchSpec) -> list[str]:
     """--in body|both：对 works/ 做线性子串扫描（ADR-0036）。
 
+    all_of 全满足、非空 any_of 至少满足一项；条件在同一份 Markdown 内判断。
     目录名 → `work_key` 只看尾段 20 位（ADR-0068 决策 7）；不匹配的目录跳过——
     `works/` 里可能有手工放进去的东西，为它报错只会挡住检索。
     """
     base = paths.works_dir(root)
     if not base.is_dir():
         return []
-    needles = [t.lower() for t in list(spec.all_of) + list(spec.any_of) if t.strip()]
-    if not needles:
+    all_of = [t.lower() for t in spec.all_of if t.strip()]
+    any_of = [t.lower() for t in spec.any_of if t.strip()]
+    if not (all_of or any_of):
         return []
     found: list[str] = []
     for work in sorted(base.iterdir()):
@@ -176,7 +178,9 @@ def _body_work_keys(conn, root, spec: SearchSpec) -> list[str]:
                 text = doc.read_text(encoding="utf-8", errors="replace").lower()
             except OSError:
                 continue
-            if any(needle in text for needle in needles):
+            if all(term in text for term in all_of) and (
+                not any_of or any(term in text for term in any_of)
+            ):
                 found.append(store.resolve_work(conn, key))
                 break
     return found
@@ -199,8 +203,8 @@ def _author_ok(item: dict, authors: Iterable[str]) -> bool:
     wanted = [a.strip().lower() for a in authors if a.strip()]
     if not wanted:
         return True
-    names = " ".join(item.get("authors") or []).lower()
-    return any(a in names for a in wanted)
+    names = [name.lower() for name in item.get("authors") or []]
+    return any(author in name for author in wanted for name in names)
 
 
 def local_work_keys(
@@ -397,7 +401,7 @@ def collect_run(
     query_name: str | None,
     sources: Sequence[str],
     refresh: str,
-    max_age_hours: int,
+    max_age_hours: float,
     from_date: str | None,
     to_date: str | None,
     venue_ids: Sequence[str],
@@ -531,7 +535,7 @@ def run_search(
     limit: int = 20,
     sources: Iterable[str] = ("openalex", "arxiv"),
     refresh: str = "auto",
-    max_age_hours: int = config.DEFAULT_MAX_AGE_HOURS,
+    max_age_hours: float = config.DEFAULT_MAX_AGE_HOURS,
     lookback_days: int | None = None,
     sort: str = "date",
     in_scope: str = "meta",
@@ -683,13 +687,13 @@ def _sync_degraded(fresh: int, quota_skips: int, quota_stops: int, total: int) -
     return {"reason": "；".join(parts)} if parts else None
 
 
-def _query_window(conn, query, *, lookback_days: int, today):
+def _query_window(conn, query, *, spec_key: str, lookback_days: int, today):
     """窗口按查询现场算：**首次执行**用它的 `since_years`，否则用 `lookback_days`。
 
-    判据是该 `query_name` 在账本里有没有完整联网采集行，不新增列。
+    判据是该 `query_name` 与当前 `spec_hash` 有没有完整联网采集行，不新增列。
     画像里后来新加的方向因此能按自己的 `since_years` 回溯，而不是永远只有 30 天。
     """
-    if store.has_successful_query(conn, query.name):
+    if store.has_successful_query(conn, query.name, spec_key):
         return config.date_window(lookback_days=lookback_days, today=today)
     return config.date_window(since_years=query.since_years, today=today)
 
@@ -755,7 +759,7 @@ def run_sync(
                 min_citations=spec.min_citations, min_fwci=spec.min_fwci,
             )
             from_date, to_date = _query_window(
-                conn, query, lookback_days=cfg.lookback_days, today=today
+                conn, query, spec_key=spec_key, lookback_days=cfg.lookback_days, today=today
             )
             collected = collect_run(
                 conn, root, spec, spec_key=spec_key, query_name=query.name,
