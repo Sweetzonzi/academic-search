@@ -38,18 +38,26 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--author", action="extend", nargs="+", default=[], metavar="名")
     search.add_argument("--since-years", type=int, default=None)
     search.add_argument("--limit", type=int, default=20)
+    search.add_argument("--offset", type=int, default=0, metavar="N",
+                        help="过滤排序后跳过前 N 个 work，只影响本地展示")
     search.add_argument("--source", action="append", default=[], metavar="源")
     search.add_argument("--refresh", choices=["auto", "true", "false"], default="auto")
     search.add_argument("--max-age", type=float, default=None, dest="max_age")
     search.add_argument("--in", choices=["meta", "body", "both"], default="meta", dest="in_scope")
-    search.add_argument("--sort", choices=["citations", "date"], default="date")
+    search.add_argument(
+        "--sort", choices=["citations", "date"], default="date",
+        help="日期或被引次数降序；arXiv 不提供引用指标，单独排序仍保留该源，"
+             "无可用被引数据的结果排后；arXiv 采集仍按日期取数",
+    )
     search.add_argument(
         "--min-citations", type=int, default=None, metavar="N",
-        help="原始被引下限（远端 filter + 本地同判；给了就跳过 arXiv 腿）",
+        help="被引次数下限（>= N）；arXiv 不提供被引次数，启用时跳过该源采集；"
+             "本地按聚合指标筛选，无指标的论文不通过",
     )
     search.add_argument(
         "--min-fwci", type=float, default=None, metavar="X",
-        help="领域归一化被引下限；与 --min-citations 同时给出时取与",
+        help="领域归一化引用影响力下限（>= X）；arXiv 不提供 FWCI，启用时跳过该源采集；"
+             "本地无该指标的论文不通过，与 --min-citations 同时给出时取与",
     )
     search.add_argument(
         "--abstract", action="store_true",
@@ -128,7 +136,7 @@ def _dispatch(args, name: str):
             min_fwci=args.min_fwci,
         )
         outcome = service.run_search(
-            root, spec, limit=args.limit, sources=sources, refresh=args.refresh,
+            root, spec, limit=args.limit, offset=args.offset, sources=sources, refresh=args.refresh,
             max_age_hours=args.max_age if args.max_age else cfg.max_age_hours,
             sort=args.sort, in_scope=args.in_scope, venue_blacklist=cfg.venue_blacklist,
             abstract=args.abstract, abstract_chars=cfg.abstract_chars,

@@ -15,14 +15,24 @@
 | `--author 名` | — | 可重复，也可一次给多个值；任一作者满足即可（OR），与其他条件取 AND |
 | `--since-years N` | — | 等价于 `published_at >= 今天 − N×365 天`（实测）；`0` 只留「今天之后」，通常为空 |
 | `--limit N` | `20` | 计**合并去重后的 work 数**；`0` = 空列表。**只截断展示**——一次远端取数固定取一页 100 条，本地再过候选预算与结构化过滤，所以 `--limit 5` 之后池子里仍可能多出很多条，而返回条数也可能**少于** `--limit`（过滤太挑或候选预算用尽）。看 `counts.local` 的 `considered/matched/returned/truncated` 解释这个差 |
+| `--offset N` | `0` | 过滤、去重、排序后跳过前 N 个 work，再按 `--limit` 返回；适用于主题查询与全库清单。与 `limit` 一样须为非负整数，负数报 `invalid_args`；零 limit 或超出范围返回空列表。仅影响本地展示，不参与新鲜度判定，也不追加远端取数 |
 | `--source 源` | `sources.toml` 里启用的采集源 | 可重复；只在启用的 `openalex` / `arxiv` 内收窄，同名来源去重。未知、不支持或禁用的来源（如 `nosuch` / `crossref`）、没有启用任何采集源均报 `invalid_args`。**它参与新鲜度判定**：`--source arxiv` 与默认两源是两次不同的检索，前者不会顶替后者的新鲜度 |
 | `--refresh auto\|true\|false` | `auto` | **三值必须显式写全**；见 §6 |
 | `--max-age 小时` | `search.toml` 的 `24` | 只对 `--refresh auto` 生效；正数支持小数，负数与非有限值报 `invalid_args`；`0` 当前沿用配置时长 |
 | `--in meta\|body\|both` | `meta` | `meta` = 只查标题/摘要；`body` = **只**扫 `works/` 下的 `paper.md`（`--refresh auto` 时不采集——正文只在本地；显式 `true` 仍照字面刷新元数据）；`both` = 两路并集。还没有生成过正文时 `body` 一条都不回 |
-| `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序，无值的排后。**它是取数条件**：两个档是两次不同的请求，各抓一次，因此换档会联网、也各算一次检索。注意它排的是**全局**被引，见下面的坑 |
-| `--min-citations N` | 关闭 | 原始被引下限，包含等于（`>= N`）：远端下发 `filter=cited_by_count:N-`，本地同判；N 为非负整数，**值为空不通过**；给了它就**跳过 arXiv 腿**。与主题条件取与，叠加不额外计费 |
-| `--min-fwci X` | 关闭 | 领域归一化被引下限，包含等于（`>= X`），远端为 `filter=fwci:X-`；X 必须是有限非负数，与 `--min-citations` 同时给出时**取与**。**覆盖不完整**：很新的论文与部分类型没有该值，而空值不通过，因此偏向有一定年头的文献 |
+| `--sort date\|citations` | `date` | `date` = `published_at` 降序；`citations` = `cited_by_count` 降序。arXiv 不提供引用指标；仅排序仍保留该源，其采集按日期取数，本地无可用被引数据的结果排后。**它是取数条件**：OpenAlex 两档取不同切片，换档分别判定新鲜度；`--refresh false` 仍不联网。排的是**全局**被引，见下面的坑 |
+| `--min-citations N` | 关闭 | 原始被引下限，包含等于（`>= N`）：远端下发 `filter=cited_by_count:N-`；N 为非负整数。arXiv 不提供被引次数，启用时跳过该源采集；本地按 work 聚合指标同判，没有被引数据的论文不通过。与主题条件取与，叠加不额外计费 |
+| `--min-fwci X` | 关闭 | 领域归一化引用影响力下限，包含等于（`>= X`），远端为 `filter=fwci:X-`；X 必须是有限非负数，与 `--min-citations` 同时给出时**取与**。arXiv 不提供 FWCI，启用时跳过该源采集；本地没有该指标的论文不通过。很新的论文与部分类型缺少 FWCI，因此筛选偏向有一定年头的文献 |
 | `--abstract` | 关闭（布尔开关） | 打开时每条附上摘要，截断到 `config/search.toml` 的 `abstract.chars`（默认 800）个字符。**不参与新鲜度判定**：同一检索式开了它也算同一次检索。`lookup` 不受它约束——`lookup` 固定带完整摘要 |
+
+**分页用法（离线回归覆盖）：**
+
+```powershell
+scripts/run.cmd search --refresh false --offset 20 --limit 20
+scripts/run.cmd search --all-of "world model" --refresh false --offset 40 --limit 20
+```
+
+两档排序的主值相同时按 `work_key` 升序，空值排后；数据库变化可能移动页边界，不提供跨命令快照。
 
 **用法清单（每条都实测过）：**
 
@@ -68,7 +78,7 @@ scripts/run.cmd search --all-of "world model" --venue ICRA --refresh true --limi
 - **不给检索式 = 列本地库全部**：空检索式跳过 FTS 过滤，返回本地所有 `live` work（条数受 `--limit` 限制）。**这一档只配 `--refresh false`**；配 `auto` / `true` 等于拿空检索式去联网。
 - **不要给空值**：`--all-of` / `--any-of` / `--author` / `--venue` 的空字符串或全空白值报 `invalid_args`。要列全部就别给检索词，并配 `--refresh false`。
 - `--limit` 数的是 **work**，不是 record：一篇由 arXiv + OpenAlex 两条记录合成的只算 1。
-- **返回条数少于 `--limit` 时先看 `counts.local`**，不要凭感觉补：`considered` 是候选预算内看了多少 work、`matched` 是过滤后 `--limit` 前有多少、`truncated` 表示预算用尽（可能还有没看的匹配）、`venue_filtered_out` 是文本命中但载体被判据滤掉的 work 数。本地检索是**在全库上**过的，与本次远端取了多少条没有减法关系。
+- **返回条数少于 `--limit` 时先看偏移与 `counts.local`**：`offset` 会跳过已匹配的条目；`considered` 是候选预算内看了多少 work，`matched` 是过滤后、offset / limit 切片前的匹配数，`returned` 是实际返回数；`truncated` 表示预算用尽，`venue_filtered_out` 是文本命中但被载体条件排除的 work 数。本地匹配数与本次远端取数没有减法关系。
 - **`--venue` 只匹配已入库记录，且只认 OpenAlex 的载体指派**。经典论文常常只有预印本记录（`work_carriers` 里没有该会的 source id），于是被白名单 fail-closed 滤掉，`counts.local.venue_filtered_out` 会把它数出来。实测 Ha & Schmidhuber 2018 的 `World Models`：库里只有 arXiv 记录，OpenAlex 对应的 NeurIPS 版标题是 `Recurrent World Models Facilitate Policy Evolution`、且 `locations` 里**只有 arXiv**——`--venue NeurIPS` 查不到它不是本地漏采，是上游没有这个载体。→ 用 venue 找经典要叠加 `--sort citations`（默认按日期只取最新一页），并预期仍可能漏；漏了就改用主题词查。
 - **短词 + `--sort citations` 的噪声比长短语大得多。** `--any-of dreamer` 按被引降序的前 20 条里，头部是 EEG 情感识别的图网络（1601 引）与 `DREAMER` 数据集（1120 引），只有 `Dream to Control`（573 引）是本方向的。词越短、越常见，全局被引越容易把跨领域高被引拉上来。→ **短词要与领域词共现**（`--all-of "world model" --any-of dreamer`），或先锚定主题再加 `--min-citations`。**不要**以为「只匹配标题」能救：`DREAMER` 数据集就在标题里，而 `Dream to Control` 的标题没有 `dreamer`——实测 title-only 会滤掉唯一相关的那篇。
 - **`--refresh false` 也会写一条 run 台账**（`refreshed=0`、`requests=0`、台账的 `counts={}`）；`lookup` 的离线命中不写。两者都不发网络请求；信封里的 `counts.local` 与台账不是一回事。
@@ -222,7 +232,7 @@ scripts/run.cmd sync --refresh false
 | `true` | **先刷新，再查库**——三条命令同义。`lookup` 在本地已命中时也会刷 |
 | `false` | **绝不联网**，只读本地库 |
 
-`search` 的判据是**检索式**，不是全局时间：换个关键词就是另一次检索。只有**会改变远端请求**的参数参与判定——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--abstract` / `--in` 不参与，所以换个 `--limit` 仍算同一次检索。新鲜度要求完整采集记录（§8）：离线和部分成功本身不使检索式变新鲜；历史行缺少完整性标记时保留语料，后续按需重新采集。
+`search` 的判据是**检索式**，不是全局时间：换个关键词就是另一次检索。只有**会改变远端请求**的参数参与判定——`all_of` / `any_of` / `venues` / `authors` / `since_years` / `--source` / `--sort` / `--min-citations` / `--min-fwci`；`--limit` / `--offset` / `--abstract` / `--in` 不参与，所以换个 `--limit` 仍算同一次检索。新鲜度要求完整采集记录（§8）：离线和部分成功本身不使检索式变新鲜；历史行缺少完整性标记时保留语料，后续按需重新采集。
 
 `sync` 用的是 `search` 那本新鲜度账，判据同为 `spec_hash`（`docs/决策/ADR-0066.md` 决策 7）。一次 `sync` 里若两条查询字段等价，后一条会命中前一条刚写的账而跳过——这是账本判据的直接结果，不额外去重。
 
@@ -255,6 +265,12 @@ scripts/run.cmd sync --refresh false
 | `dup_suspect` | 疑似同一篇但**未合并**，引用时必须说明 |
 
 `data` 除 `items` 外：`network`（本次是否发过请求）、`cost`（`{usd, basis, requests}`，含失败请求）；`counts`（`search` 恒有，`lookup` 只在刷新时）——`counts.local` 是本地漏斗 `{considered, matched, returned, truncated, venue_filtered_out}`，用来解释「为什么返回条数少于 `--limit`」。`search` 进入采集流程时另有 `new_candidates` / `dedup_blocked` / `by_source` / `failures` / `complete`，即使全部来源被条件排除也保留这些字段，此时 `network=false`、`complete=false`。
+
+**`data.warnings`**：`search` / `lookup` 成功返回的可选字符串列表，没有提示时省略。包含来源因能力限制被实际跳过、候选预算截断、部分来源失败、额度停止或标题查询无法执行所请求刷新的人读说明；同类合并。正常离线、新鲜度复用或零结果本身不产生提示。机器判断继续使用 `counts` / `degraded`；本字段不进入账本或 `sync` 留档。触发条件的权威定义见仓库 `docs/接口/输出载荷.md` §2。例如：
+
+```json
+"warnings": ["arXiv 采集接口不提供被引次数，已因 --min-citations 条件跳过该源采集。"]
+```
 
 **`counts.complete`（`search` / `sync`）**：实际发起请求、未被条件排除的来源均成功完成规定的一页、且未因额度停止时为 `true`；成功空页也算完成。这不是远端全库覆盖率。只有 `status=ok`、`refreshed=true`、`requests>0` 且此标记为真的账本行可证明新鲜度或首次回溯完成。离线与新鲜度跳过的账本 `counts={}`；`lookup` 不带此标记。部分成功后若没有完整采集依据，下次 `auto` 会重查整条检索式，逐源补查尚未实现。
 

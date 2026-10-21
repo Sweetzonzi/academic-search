@@ -342,7 +342,7 @@ def canonical_spec(
     """检索式的规范形式：字段排序、大小写归一、关键词排序（ADR-0043）。
 
     收哪几个参数只有一条判据——**它改不改变远端请求**（ADR-0062 决策 1–3）。
-    因此 `--limit` / `--abstract` / `--in` 不在这里；`from_date` / `to_date`
+    因此 `--limit` / `--offset` / `--abstract` / `--in` 不在这里；`from_date` / `to_date`
     只接**显式给出**的窗口，接一个算出来的日期会让 hash 每天变一次（决策 4）。
     """
 

@@ -422,6 +422,12 @@ def test_low_quota_stops_the_remaining_legs_and_queries(root, capsys, monkeypatc
     assert code == 0
     runs = env["data"]["runs"]
     assert "余额不足" in env["data"]["degraded"]["reason"]
+    assert "warnings" not in env["data"]
+    for entry in runs:
+        doc = read_run_json(root, entry["run_id"])
+        assert "warnings" not in entry and "warnings" not in doc
+        assert "warnings" not in doc["counts"]
+        assert entry["counts"] == doc["counts"]
     # 第一条查询只跑完第一个源就被拦下，第二条一次请求都没发
     assert runs[0]["refreshed"] is True and runs[0]["counts"]["by_source"]["arxiv"] == 0
     assert runs[1]["refreshed"] is False

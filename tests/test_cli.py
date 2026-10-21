@@ -357,6 +357,7 @@ def test_lookup_title_refresh_true_degrades_and_still_returns_local(root, capsys
     env = envelope_of(capsys)
     assert env["data"]["network"] is False
     assert "只查本地" in env["data"]["degraded"]["reason"]
+    assert env["data"]["warnings"] == [env["data"]["degraded"]["reason"]]
     assert env["data"]["items"][0]["title"] == "Abstract demo"
 
 
@@ -803,6 +804,8 @@ def test_candidate_budget_truncates_and_says_so(root):
     local = outcome.counts["local"]
     assert local["considered"] == 1
     assert local["truncated"] is True
+    assert len(outcome.payload()["warnings"]) == 1
+    assert "候选预算" in outcome.payload()["warnings"][0]
 
 
 def test_venue_filtered_out_is_counted(root):
@@ -878,11 +881,16 @@ def test_partial_source_failure_does_not_lock_the_query_fresh(root):
     spec = SearchSpec(any_of=["control"])
     first = service.run_search(root, spec, refresh="true", client=PartialClient())
     assert first.counts["failures"] and first.counts["complete"] is False
+    assert len(first.payload()["warnings"]) == 1
+    assert "arxiv" in first.payload()["warnings"][0]
+    assert "请求失败" in first.payload()["warnings"][0]
     second = service.run_search(root, spec, refresh="auto", client=FixtureClient())
     assert second.network is True and second.counts["complete"] is True
     assert second.counts["failures"] == []
+    assert "warnings" not in second.payload()
     third = service.run_search(root, spec, refresh="auto", client=FixtureClient())
     assert third.network is False, "完整采集之后才复用新鲜度"
+    assert third.degraded is not None and "warnings" not in third.payload()
 
 
 def test_search_honours_configured_quota_threshold(root, capsys, monkeypatch):
@@ -900,6 +908,7 @@ def test_search_honours_configured_quota_threshold(root, capsys, monkeypatch):
     assert data["network"] is True and data["cost"]["requests"] == 1
     assert data["counts"]["by_source"]["arxiv"] == 0
     assert data["counts"]["complete"] is False and "余额不足" in data["degraded"]["reason"]
+    assert data["warnings"] == [data["degraded"]["reason"] + "；结果覆盖可能不完整。"]
     assert not any("export.arxiv.org" in url for url in client.urls)
 
 
@@ -909,6 +918,9 @@ def test_all_sources_skipped_is_not_a_network_refresh(root):
     outcome = service.run_search(root, spec, sources=["arxiv"], refresh="true", client=client)
     assert outcome.network is False and client.requests == 0
     assert outcome.counts["complete"] is False
+    assert len(outcome.payload()["warnings"]) == 1
+    assert "arXiv" in outcome.payload()["warnings"][0]
+    assert "--min-citations" in outcome.payload()["warnings"][0]
     conn = store.connect(config.db_path(root))
     try:
         row = conn.execute("SELECT refreshed FROM run ORDER BY run_id DESC LIMIT 1").fetchone()
@@ -921,3 +933,252 @@ def test_offline_identifier_miss_never_claims_network(root, capsys):
     assert cli.main(["--root", str(root), "lookup", "--doi", "10.9999/missing", "--refresh", "false"]) == 1
     message = envelope_of(capsys)["error"]["message"]
     assert "不联网" in message and "联网未取到" not in message
+
+
+@pytest.mark.parametrize("scope", ["catalog", "meta", "body", "both"])
+def test_offset_pages_filtered_work_results_without_repeats(root, capsys, scope):
+    keys = ["p" * 18 + chr(97 + i // 26) + chr(97 + i % 26) for i in range(42)]
+    for key in reversed(keys):
+        _insert_work(root, key, title="Pagination Probe", body="pagination")
+    args = ["--root", str(root), "search", "--refresh", "false", "--source", "arxiv"]
+    if scope != "catalog":
+        args += ["--all-of", "pagination", "--in", scope]
+    observed = []
+    for offset in (0, 20, 40, 100):
+        # 第一批省略 offset，验证默认值与默认 limit=20。
+        page_args = args if offset == 0 else [*args, "--offset", str(offset)]
+        assert cli.main(page_args) == 0
+        data = envelope_of(capsys)["data"]
+        page = [item["work_key"] for item in data["items"]]
+        assert page == keys[offset:offset + 20]
+        assert data["counts"]["local"] == {
+            "considered": 42, "matched": 42, "returned": len(page),
+            "truncated": False, "venue_filtered_out": 0,
+        }
+        assert data["network"] is False and data["cost"]["requests"] == 0
+        observed.extend(page)
+    assert observed == keys
+
+
+@pytest.mark.parametrize("sort,field,high,low", [
+    ("date", "published_at", "2026-10-04", "2026-10-03"),
+    ("citations", "cited_by_count", 200, 100),
+])
+def test_offset_order_is_stable_for_ties_and_missing_values(root, sort, field, high, low):
+    keys = {letter: "p" * 19 + letter for letter in "abcde"}
+    for letter, value in zip("abcde", [high, low, low, None, None]):
+        _insert_work(root, keys[letter], title="Pagination Probe", **{field: value})
+    conn = store.connect(config.db_path(root))
+    try:
+        items = service._sorted_items(
+            conn, [keys[letter] for letter in "ecadb"], spec=SearchSpec(),
+            blocked_venues=[], venue_ids=[], sort=sort, offset=1, limit=3,
+        )
+    finally:
+        conn.close()
+    assert [item["work_key"] for item in items] == [keys[letter] for letter in "bcd"]
+
+
+@pytest.mark.parametrize("sort,expected", [("date", "c"), ("citations", "d")])
+def test_offset_is_applied_after_threshold_filtering_and_sorting(root, sort, expected):
+    for index, (letter, cited) in enumerate(zip("abcd", [100, 0, 200, 150])):
+        _insert_work(root, "p" * 19 + letter, title="Pagination Probe", source="openalex",
+                     cited_by_count=cited, published_at="2026-10-0" + str(4 - index))
+    outcome = service.run_search(
+        root, SearchSpec(all_of=["pagination"], min_citations=100),
+        refresh="false", sources=["openalex"], sort=sort, offset=1, limit=1,
+    )
+    assert [item["work_key"] for item in outcome.items] == ["p" * 19 + expected]
+    assert outcome.counts["local"]["considered"] == 4
+    assert outcome.counts["local"]["matched"] == 3
+    assert outcome.counts["local"]["returned"] == 1
+
+
+@pytest.mark.parametrize("offset,limit,returned", [(1, 0, 0), (2, 20, 0), (1, 20, 1)])
+def test_offset_and_limit_empty_and_short_pages(root, offset, limit, returned):
+    for letter in "ab":
+        _insert_work(root, "p" * 19 + letter, title="Pagination Probe")
+    outcome = service.run_search(
+        root, SearchSpec(), refresh="false", sources=["arxiv"], offset=offset, limit=limit,
+    )
+    assert len(outcome.items) == returned
+    assert outcome.counts["local"]["matched"] == 2
+    assert outcome.counts["local"]["returned"] == returned
+
+
+@pytest.mark.parametrize("option", ["--offset", "--limit"])
+def test_cli_rejects_negative_pagination_before_database(root, capsys, option):
+    assert cli.main(["--root", str(root), "search", "--refresh", "false", option, "-1"]) == 1
+    error = envelope_of(capsys)["error"]
+    assert error["code"] == "invalid_args" and option in error["message"]
+    assert not config.db_path(root).exists()
+
+
+@pytest.mark.parametrize("values", [{"offset": -1}, {"limit": -1}])
+def test_service_rejects_negative_pagination_before_database(root, values):
+    with pytest.raises(service.envelope.EnvelopeError) as exc:
+        service.run_search(root, SearchSpec(), refresh="false", **values)
+    assert exc.value.code == "invalid_args"
+    assert not config.db_path(root).exists()
+
+
+def test_offset_preserves_candidate_budget_truncation(root):
+    for letter in "abc":
+        _insert_work(root, "p" * 19 + letter, title="Pagination Probe")
+    for offset, returned in ((1, 1), (2, 0)):
+        outcome = service.run_search(
+            root, SearchSpec(all_of=["pagination"]), refresh="false", sources=["arxiv"],
+            offset=offset, limit=20, max_candidates=2,
+        )
+        assert outcome.counts["local"] == {
+            "considered": 2, "matched": 2, "returned": returned,
+            "truncated": True, "venue_filtered_out": 0,
+        }
+
+
+def test_offset_reuses_freshness_and_does_not_fetch_more_pages(root, capsys, monkeypatch):
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    args = ["--root", str(root), "search", "--any-of", "control", "--source", "openalex"]
+    assert cli.main([*args, "--refresh", "true"]) == 0
+    assert envelope_of(capsys)["data"]["network"] is True
+    assert cli.main([*args, "--refresh", "auto", "--offset", "1000"]) == 0
+    data = envelope_of(capsys)["data"]
+    assert data["network"] is False and data["cost"]["requests"] == 0
+    assert client.requests == 1 and "per_page=100" in client.urls[0]
+    conn = store.connect(config.db_path(root))
+    try:
+        hashes = [row["spec_hash"] for row in conn.execute("SELECT spec_hash FROM run ORDER BY run_id")]
+    finally:
+        conn.close()
+    assert len(hashes) == 2 and hashes[0] == hashes[1]
+
+
+@pytest.mark.parametrize("options,terms", [
+    (["--min-citations", "0"], ["被引次数", "--min-citations"]),
+    (["--min-fwci", "0"], ["FWCI", "--min-fwci"]),
+    (["--min-citations", "1", "--min-fwci", "2", "--venue", "ICRA"],
+     ["被引次数", "FWCI", "载体信息", "--min-citations", "--min-fwci", "--venue"]),
+])
+def test_warnings_explain_actual_arxiv_skip(root, capsys, monkeypatch, options, terms):
+    client = FixtureClient()
+    monkeypatch.setattr(service, "make_client", lambda: client)
+    code = cli.main(["--root", str(root), "search", "--any-of", "attention",
+                     "--refresh", "true", *options])
+    env = envelope_of(capsys)
+    assert code == 0 and env["ok"] is True
+    data = env["data"]
+    assert len(data["warnings"]) == 1
+    assert all(term in data["warnings"][0] for term in ["arXiv", "不提供", "跳过", *terms])
+    assert data["counts"]["by_source"]["arxiv"] == 0
+    assert not data["counts"]["failures"]
+    assert not any("export.arxiv.org" in url for url in client.urls)
+    assert "warnings" not in data["counts"] and "warnings" not in data.get("degraded", {})
+    conn = store.connect(config.db_path(root))
+    try:
+        counts = json.loads(conn.execute("SELECT counts FROM run ORDER BY run_id DESC").fetchone()[0])
+        assert "warnings" not in counts
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("refresh", ["false", "auto"])
+def test_warnings_do_not_claim_arxiv_skipped_when_no_collection(root, refresh):
+    spec = SearchSpec(any_of=["attention"], min_citations=1)
+    service.run_search(root, spec, refresh="true", client=FixtureClient())
+    client = FixtureClient()
+    outcome = service.run_search(root, spec, refresh=refresh, client=client)
+    assert client.requests == 0 and outcome.network is False
+    assert "warnings" not in outcome.payload()
+
+
+@pytest.mark.parametrize("spec,sort", [
+    (SearchSpec(any_of=["attention"], min_citations=1), "date"),
+    (SearchSpec(any_of=["attention"], min_fwci=1), "date"),
+    (SearchSpec(any_of=["attention"]), "citations"),
+])
+def test_warnings_do_not_claim_unselected_arxiv_skipped(root, spec, sort):
+    outcome = service.run_search(root, spec, refresh="true", sort=sort,
+                                 sources=["openalex"], client=FixtureClient())
+    assert "warnings" not in outcome.payload()
+
+
+def test_citation_sort_alone_fetches_arxiv_without_skip_warning(root):
+    client = FixtureClient()
+    outcome = service.run_search(root, SearchSpec(any_of=["attention"]),
+                                 refresh="true", sort="citations", client=client)
+    assert any("export.arxiv.org" in url for url in client.urls)
+    assert outcome.counts["by_source"]["arxiv"] > 0
+    assert "warnings" not in outcome.payload()
+
+
+def test_warnings_before_quota_stop_do_not_claim_source_capability_skip(root):
+    client = FixtureClient()
+    client.rate_remaining_usd = 0.0
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["attention"], min_citations=1),
+        refresh="true", client=client,
+    )
+    assert client.requests == 0 and outcome.network is False
+    warnings = outcome.payload()["warnings"]
+    assert len(warnings) == 1 and "余额不足" in warnings[0]
+    assert "只查本地" in warnings[0] and "arXiv" not in warnings[0]
+
+
+def test_warnings_combine_source_skip_and_truncation_even_on_empty_page(root):
+    for letter in "abc":
+        _insert_work(root, "w" * 19 + letter, title="Warnings Probe",
+                     source="openalex", cited_by_count=100)
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["warnings"], min_citations=1), refresh="true",
+        max_candidates=1, offset=1, client=FixtureClient(),
+    )
+    assert outcome.items == [] and outcome.counts["local"]["truncated"] is True
+    warnings = outcome.payload()["warnings"]
+    assert len(warnings) == len(set(warnings)) == 2
+    assert "arXiv" in warnings[0] and "候选预算" in warnings[1]
+
+
+@pytest.mark.parametrize("failed_source", ["openalex", "crossref"])
+def test_lookup_partial_failure_produces_warning_and_preserves_success(root, failed_source):
+    class PartialClient(FixtureClient):
+        def get(self, url, headers=None, source=""):
+            if source == failed_source:
+                self.requests += 1
+                raise service.SourceError(source, "503 临时失败", True)
+            return super().get(url, headers=headers, source=source)
+
+    outcome = service.run_lookup(root, doi="10.1109/mcse.2011.37", refresh="true", client=PartialClient())
+    assert outcome.items and outcome.counts["failures"][0]["source"] == failed_source
+    assert len(outcome.payload()["warnings"]) == 1
+    assert failed_source in outcome.payload()["warnings"][0]
+    assert "请求失败" in outcome.payload()["warnings"][0]
+
+
+@pytest.mark.parametrize("refresh", ["auto", "false"])
+def test_normal_lookup_does_not_emit_warnings(root, refresh):
+    _insert_abstract_work(root)
+    outcome = service.run_lookup(root, title="Abstract demo", refresh=refresh)
+    assert "warnings" not in outcome.payload()
+
+
+def test_lookup_failed_refresh_keeps_cached_result_and_merges_source_warning(root):
+    _insert_local_openalex_work(root)
+
+    class FailingClient(FixtureClient):
+        def get(self, url, headers=None, source=""):
+            self.requests += 1
+            raise service.SourceError(source, "503 临时失败", True)
+
+    outcome = service.run_lookup(root, doi="10.1109/mcse.2011.37", refresh="true", client=FailingClient())
+    assert outcome.items and len(outcome.counts["failures"]) == 2
+    assert len(outcome.payload()["warnings"]) == 1
+    assert "openalex、crossref" in outcome.payload()["warnings"][0]
+
+
+def test_warning_payload_deduplicates_without_mutating_counts_or_degraded():
+    outcome = service.Outcome(warnings=["第一条", "第一条", "第二条"],
+                              counts={"local": {}}, degraded={"reason": "已有说明"})
+    data = outcome.payload()
+    assert data["warnings"] == ["第一条", "第二条"]
+    assert data["counts"] == {"local": {}} and data["degraded"] == {"reason": "已有说明"}

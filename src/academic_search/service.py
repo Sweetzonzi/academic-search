@@ -34,6 +34,7 @@ class Outcome:
     degraded: dict | None = None
     counts: dict = field(default_factory=dict)
     run_id: int | None = None
+    warnings: list[str] = field(default_factory=list)
 
     def payload(self) -> dict:
         data = {
@@ -49,6 +50,8 @@ class Outcome:
             data["counts"] = self.counts
         if self.degraded is not None:
             data["degraded"] = self.degraded
+        if self.warnings:
+            data["warnings"] = list(dict.fromkeys(self.warnings))
         return data
 
 
@@ -128,6 +131,41 @@ def _skip_legs(spec: SearchSpec, *, venue_ids: Sequence[str]) -> set[str]:
     if venue_ids or spec.classical_only():
         return {"arxiv"}
     return set()
+
+
+def _failure_warnings(failures: Sequence[dict]) -> list[str]:
+    if not failures:
+        return []
+    names = "、".join(dict.fromkeys(failure["source"] for failure in failures))
+    return ["来源请求失败（" + names + "），结果覆盖可能不完整；详情见 counts.failures。"]
+
+
+def _search_warnings(spec: SearchSpec, collected: dict, local_stats: dict, *,
+                     skipped: set[str], venue_ids: Sequence[str]) -> list[str]:
+    """由本次执行事实生成展示提示；不改变采集账本或结构化判据。"""
+    counts = collected["counts"]
+    warnings: list[str] = []
+    # by_source 只在进入采集循环后填充；可区分能力跳过与整次未采集。
+    if "arxiv" in skipped and "arxiv" in counts.get("by_source", {}):
+        missing, conditions = [], []
+        if spec.min_citations is not None:
+            missing.append("被引次数")
+            conditions.append("--min-citations")
+        if spec.min_fwci is not None:
+            missing.append("领域归一化引用影响力（FWCI）")
+            conditions.append("--min-fwci")
+        if venue_ids:
+            missing.append("用于载体白名单判定的载体信息")
+            conditions.append("--venue")
+        warnings.append("arXiv 采集接口不提供" + "、".join(missing)
+                        + "，已因 " + " / ".join(conditions) + " 条件跳过该源采集。")
+    if local_stats.get("truncated"):
+        warnings.append("本地候选预算已耗尽，排序和分页仅覆盖已检查的候选；"
+                        "仍可能有未检查的匹配结果。")
+    warnings.extend(_failure_warnings(counts.get("failures", [])))
+    if collected["skip_reason"] == "quota" or collected["quota_stopped"]:
+        warnings.append(collected["degraded"] + "；结果覆盖可能不完整。")
+    return warnings
 
 
 def _fts_query(spec: SearchSpec) -> str:
@@ -293,7 +331,7 @@ def local_work_keys(
 
 def _sorted_items(
     conn, keys, *, spec: SearchSpec, blocked_venues, venue_ids, sort: str, limit: int,
-    stats: dict | None = None,
+    offset: int = 0, stats: dict | None = None,
 ) -> list[dict]:
     items = []
     venue_filtered_out = 0
@@ -313,6 +351,8 @@ def _sorted_items(
         if not _threshold_ok(item, spec):
             continue
         items.append(item)
+    # 先按稳定键排，再用稳定排序施加主序；并列与空值组均按 work_key 升序。
+    items.sort(key=lambda item: item["work_key"])
     if sort == "citations":
         counted = sorted(
             [i for i in items if i["cited_by_count"] is not None],
@@ -332,7 +372,7 @@ def _sorted_items(
     if stats is not None:
         stats["matched"] = len(items)
         stats["venue_filtered_out"] = venue_filtered_out
-    return items[:limit]
+    return items[offset:offset + limit]
 
 
 def _shape_abstracts(items: list[dict], *, include: bool, chars: int) -> list[dict]:
@@ -533,6 +573,7 @@ def run_search(
     spec: SearchSpec,
     *,
     limit: int = 20,
+    offset: int = 0,
     sources: Iterable[str] = ("openalex", "arxiv"),
     refresh: str = "auto",
     max_age_hours: float = config.DEFAULT_MAX_AGE_HOURS,
@@ -547,6 +588,9 @@ def run_search(
     client=None,
     today=None,
 ) -> Outcome:
+    for option, value in (("--offset", offset), ("--limit", limit)):
+        if value < 0:
+            raise envelope.EnvelopeError(envelope.INVALID_ARGS, option + " 必须是非负整数")
     root = str(root)
     sources = list(sources)
     # 名单先解析：写库之前就要知道这次能不能跑（ADR-0060 决策 2）
@@ -596,7 +640,7 @@ def run_search(
         )
         outcome.items = _shape_abstracts(
             _sorted_items(conn, keys, spec=spec, blocked_venues=blocked_venues,
-                          venue_ids=venue_ids, sort=sort, limit=limit, stats=local_stats),
+                          venue_ids=venue_ids, sort=sort, limit=limit, offset=offset, stats=local_stats),
             include=abstract,
             chars=abstract_chars,
         )
@@ -611,6 +655,9 @@ def run_search(
             "venue_filtered_out": local_stats.get("venue_filtered_out", 0),
         }
         outcome.counts = counts
+        outcome.warnings = _search_warnings(
+            spec, collected, local_stats, skipped=skipped, venue_ids=venue_ids,
+        )
         return outcome
     finally:
         conn.close()
@@ -839,6 +886,7 @@ def run_lookup(
 
         if refresh == "true" and ident is None:
             outcome.degraded = {"reason": "标题不是标识，`--title` 用不了免费的单实体 GET；本次只查本地"}
+            outcome.warnings.append(outcome.degraded["reason"])
 
         if _refresh_lookup(refresh, ident is not None, work_key):
             client = client or make_client()
@@ -886,6 +934,7 @@ def run_lookup(
             outcome.cost_basis = client.cost_basis
             outcome.counts = {"new_candidates": 0, "dedup_blocked": 0,
                               "by_source": {}, "failures": failures}
+            outcome.warnings.extend(_failure_warnings(failures))
             # 先刷再查本地：刷新后重新按标识解析——归组与桥接管都可能换掉持有者
             # （ADR-0065 决策 3），不拿 ingest 的返回值当结论。
             work_key = _work_by_ident(conn, ident) or work_key
