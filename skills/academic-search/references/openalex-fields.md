@@ -22,7 +22,7 @@
 | 任意 4xx / 5xx | **免费**（计 0 credits） |
 | `from_created_date` / `from_updated_date` | 文档标注付费层，无 key 实测 429 → 「增量」只能走「回看 N 天 + 本地去重」 |
 
-**含义**：匿名档随时可能 429，而且额度一旦耗尽，同一出口 IP 一整天都是 429。要用 OpenAlex 就先配 `OPENALEX_API_KEY`；没配的时候不要指望它，靠 `--source arxiv`。
+**含义**：匿名档随时可能 429，额度耗尽会影响同一出口 IP；可靠使用 OpenAlex 应配置 key。凭据注入与可用性检查统一见[初始化参考 §3](setup.md#3-openalex-凭据)。改用 `--source arxiv` 时说明覆盖变化，该源不能替代被引、FWCI 或载体筛选。
 
 ## 3. 字段语义里会咬人的几条
 

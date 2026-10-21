@@ -23,5 +23,6 @@ title: 实验记录注册表
 | [EX-2026-10-21-search-semantics](EX-2026-10-21-检索语义.md) | 2026-10-21 | OpenAlex 引用阈值的包含下界与作者 OR（7 次真实请求） | [ADR-0071](../决策/ADR-0071.md)、[ADR-0072](../决策/ADR-0072.md) |
 | [EX-2026-10-21-local-pagination](EX-2026-10-21-本地排序与分页.md) | 2026-10-21 | 真实本地库的日期、被引排序与 offset 验收 | [ADR-0073](../决策/ADR-0073.md) |
 | [EX-2026-10-21-warnings](EX-2026-10-21-返回提示.md) | 2026-10-21 | warnings 的真实启动器与 OpenAlex 验收 | [IFACE-PAYLOAD §2](../接口/输出载荷.md) |
+| [EX-2026-10-22-initialization](EX-2026-10-22-技能初始化.md) | 2026-10-22 | 启动器回归、安装副本的空库自检与 OpenAlex 权限边界 | [IFACE-SKILL](../接口/交付物-skill打包.md) |
 
 > 更新规则：新增实验时只追加行，不改动既有行。

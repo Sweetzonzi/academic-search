@@ -333,13 +333,13 @@ expires = "2026-12-31"
 | `profile_invalid` | 解析失败（附出错行） | ❌ | 修文件后重跑 `profile check` |
 | `invalid_args` | 参数不合法 | ❌ | 改参数 |
 | `not_found` | 标识或 `work_key` 未命中 | ❌ | 换标识，或先 `search` 联网取 |
-| `source_error` | 全部源都失败、零写入 | ✅ | — |
-| `network_error` | 网络不可达 | ✅ | — |
-| `rate_limited` | 429 或余额耗尽且无法降级 | ✅ 稍后 | — |
+| `source_error` | 全部源都失败、零写入 | 原因允许时一次 | 授权、依赖或策略问题先修原因，见[初始化排障](setup.md#5-按失败阶段恢复) |
+| `network_error` | 网络不可达 | 暂时故障一次 | 网络策略拒绝、代理或证书配置错误先修原因，见[初始化排障](setup.md#5-按失败阶段恢复) |
+| `rate_limited` | 429 或余额耗尽且无法降级 | 依返回原因 | 速率限制稍后一次；额度耗尽停止，按返回信息等待或使用已有结果 |
 | `io_error` | 本地读写失败 | ❌ | 排查路径与权限 |
-| `data_not_writable` | 数据目录不可写（只读挂载 / 权限不足）；**连 `--refresh false` 都打不开库** | ❌ | 把仓库放到可写位置，或把 `ACADEMIC_SEARCH_ROOT` 指到可写目录；`version` / `profile` 不碰库，会照常成功，**别拿它们当环境自检** |
+| `data_not_writable` | 数据目录不可写（只读挂载 / 权限不足）；**连 `--refresh false` 都打不开库** | ❌ | 按[初始化排障](setup.md#5-按失败阶段恢复)检查原库权限与根目录；迁移保留配置和数据 |
 | `internal_error` | 未分类缺陷 | ❌ | 报缺陷 |
 
-可重试的**只重试一次**。`source_error` / `network_error` / `rate_limited` 在**仍产出结果**时不走本表，只记进 `counts.failures[]` / `degraded`。
+可重试的**只重试一次**。启动器失败可能没有信封，先用 [launcher 诊断](setup.md#4-分层自检)定位；`version` / `profile` 成功不证明数据库或网络可用。`source_error` / `network_error` / `rate_limited` 在**仍产出结果**时不走本表，只记进 `counts.failures[]` / `degraded`。
 
 **缺 pandoc 也报 `source_error`**，但那不是网络问题、重试无用——按 `error.message` 把它装好（获取方式与三处查找顺序见 SKILL.md §7）。

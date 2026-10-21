@@ -17,7 +17,8 @@ CLI 的检索结果均来自本地库，联网负责刷新语料。每篇以 `wo
     skills/academic-search/scripts/run.sh   <命令> [参数...]     # POSIX
 
 - 上述路径用于仓库内调用；安装后的副本用该 skill 目录下的 `scripts/`，不要假定当前目录就是仓库根。参数与示例按需读 [CLI 参考](references/cli-reference.md) 对应命令小节。
-- 仓库根解析顺序：`--root` → `ACADEMIC_SEARCH_ROOT` → bundle 的 `root.txt` → bundle 的上两级目录。`--root` 是全局选项，必须放在子命令前：`--root <路径> search ...`。
+- **首次使用、环境变化或启动失败时先读 [初始化与排障](references/setup.md)**，按启动器诊断 → 本地库 → 所需来源联网分层验证。`--diagnose` 只检查本地启动前提；正常调用已验证的环境时直接执行任务。
+- 仓库根绑定、Python 和凭据注入见初始化参考；`--root` 是全局选项，放在子命令前：`--root <仓库路径> search ...`。根目录同时决定配置和缓存位置，切换时说明实际使用的库。
 - 显式写全 `--refresh auto|true|false`：通常用 `auto` 复用新鲜缓存，要求强制更新时用 `true`，仅查本地用 `false`。`search` 的 `auto` 按检索式新鲜度判断；`lookup` 的 `auto` 按标识是否已命中判断。对 DOI / arXiv ID，`true` 均先刷新再查本地。
 - 不直接修改 `data/`；采集、去重与落库交给 CLI。CLI 不调用 LLM，文献筛选与解释由当前 agent 完成。
 
@@ -73,7 +74,7 @@ stdout 是 JSON 信封 `{ok, command, schema, data|error}`，日志走 stderr。
 - **部分源失败**：`counts.failures[]` 非空时仍可能 `ok=true`，使用成功结果并说明缺失来源；`search` / `sync` 的 `counts.complete` 表示本次规定的采集是否完成，细则见 CLI 参考 §8，不能把失败或跳过的来源报告成已完成检索。
 - **`warnings`**：`search` / `lookup` 可返回 `data.warnings` 字符串列表。阅读并向用户转述影响覆盖范围或结果判断的提示，与 `counts`、`degraded` 中的同一事实合并说明；没有该字段不代表检索完整。字段用法见 CLI 参考 §8。
 - **`degraded`**：读 `reason` 并结合 `network`、`cost.requests`；`sync` 看各 `runs[].refreshed`、状态与成本。新鲜度命中是正常复用，只需说明本次未刷新；额度不足可能整次跳过，也可能已经完成部分来源。不要统一说“只查本地”，也不要因该标记重复请求或绕过额度限制。
-- **`ok=false`**：仅 `busy`、`source_error`、`network_error`、`rate_limited` 在原因允许恢复时最多重试一次；缺依赖、错误参数等确定性问题先修原因。`data_not_writable` 需换可写根目录，重复执行无用。错误码细节见 CLI 参考 §10。
+- **`ok=false`**：仅 `busy`、`source_error`、`network_error`、`rate_limited` 在原因允许恢复时最多重试一次；缺依赖、错误参数、写权限或网络策略拒绝先按[初始化参考 §5](references/setup.md#5-按失败阶段恢复)修原因，重复执行无用。错误码细节见 CLI 参考 §10。
 
 ## 6. 交付与证据
 
@@ -86,13 +87,13 @@ stdout 是 JSON 信封 `{ok, command, schema, data|error}`，日志走 stderr。
 
 ## 7. 环境要求与未接线
 
-- **Python 与可写目录**：需要 Python `>=3.11`，可用 `ACADEMIC_SEARCH_PYTHON` 指定真实解释器，启动器会探测并回退。库采用 SQLite WAL，离线读取也需要可写根目录。首次使用或环境改变时，可用 `search --refresh false --limit 1` 自检；`version` / `profile` 成功不证明库可写。
-- **凭据**：OpenAlex 使用环境变量 `OPENALEX_API_KEY`，只检查是否存在，不打印或写入凭据；arXiv 不需要 key。鉴权与额度细节按需读 [OpenAlex 参考](references/openalex-fields.md) §2。
+- **运行前提**：Python `>=3.11`、可写存储；OpenAlex 凭据由执行进程的 `OPENALEX_API_KEY` 提供，arXiv 不需要 key。设置、自检与失败恢复统一见[初始化参考](references/setup.md)；不输出凭据值。
 - **能力边界**：`search`、`lookup`、`download`、`sync`、`profile`、`verify`、`version` 已接线；`read`、`digest`、`export` / `bundle`、`promote`、`graph` 尚未接线，不能通过调用这些命令声称完成精读、摘要缓存或导出。初版不接 Zotero。
 - **转换依赖**：检索与原件下载无需 pandoc。转换链按 `ACADEMIC_SEARCH_PANDOC`（可执行文件）→ 仓库 `vendor/pandoc/pandoc.exe`（POSIX 为 `pandoc`）→ `PATH` 查找；可从 [pandoc 官方发布页](https://github.com/jgm/pandoc/releases/latest) 下载对应平台压缩包，解出可执行文件放入上述位置。转换链存在不代表 `read` 已接线。
 
 ## 8. 按需参考
 
+- [初始化与排障](references/setup.md)：首次使用、环境变化或启动失败时读；包括安装绑定、解释器、凭据、沙箱权限和分层自检。
 - [CLI 参考](references/cli-reference.md)：具体命令的参数与示例、载荷、错误码和画像字段；执行不熟悉的命令前读对应小节。
 - [OpenAlex 参考](references/openalex-fields.md)：需要判断覆盖、被引、身份、日期与计费时读。
 - [arXiv 参考](references/arxiv-syntax.md)：选择 arXiv 来源、调整检索语法、处理日期窗与限流时读；该源关键词查摘要，不能假定只出现在标题中的词也会命中。

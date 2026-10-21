@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -91,6 +92,8 @@ def main() -> int:
     snapshot = OUT / ("snapshot-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
     (snapshot / "data").mkdir(parents=True)
     (snapshot / "config").mkdir()
+    # launcher 的显式根同时绑定代码与数据，验收副本需要完整的 src/。
+    shutil.copytree(ROOT / "src", snapshot / "src", ignore=shutil.ignore_patterns("__pycache__"))
     # 一致性备份实际语料，只在验收副本中将预算改为 1；不改用户配置。
     with sqlite3.connect((ROOT / "data/sidecar.db").as_uri() + "?mode=ro", uri=True) as source:
         with sqlite3.connect(snapshot / "data/sidecar.db") as target:
