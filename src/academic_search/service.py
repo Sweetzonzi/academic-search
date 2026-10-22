@@ -7,12 +7,14 @@ cli.py 只做参数与信封；SQL 与网络都在这层（DEV-CONV §4）。
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from . import config, envelope, group, htmlclean, identity, paths, report, store, textify, venues
+from . import config, envelope, group, htmlclean, identity, paper, paths, report, store, textify, venues
 from .sources import SearchSpec, SourceError, normalize_doi as source_normalize_doi
 from .sources import arxiv as arxiv_source
 from .sources import crossref as crossref_source
@@ -1106,147 +1108,146 @@ def _work_projection(conn, root, work_key: str) -> Path:
     return target
 
 
-def run_download(
-    root,
-    work_key: str,
-    *,
-    source: str = "auto",
-    refresh: str = "auto",
-    client=None,
-) -> DownloadOutcome:
-    """取**原始字节**存 `bytes/`、投影 `works/<proj>/source.*`、登记 `artifact`。
-
-    契约：IFACE §1 的 download 行、IFACE-PAYLOAD §5.1、ADR-0067 决策 4/5/6。
-    **这里不转换**——转换属于 `read`。缓存判据是版本相等：`--refresh auto` 命中即零请求，
-    `true` 无视版本、带验证器做条件 GET（304 复用已有字节），`false` 只读本地。
-    """
-    if source not in DOWNLOAD_SOURCES:
-        raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知 --source：" + str(source))
-    if refresh not in ("auto", "true", "false"):
-        raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知 --refresh：" + str(refresh))
-    root = str(root)
+def run_download(root, work_key: str, *, source: str = "auto", refresh: str = "auto", client=None) -> DownloadOutcome:
+    """取原始字节；事务与 read 共用取件步骤，失败也保留原件与请求账本。"""
+    if source not in DOWNLOAD_SOURCES or refresh not in ("auto", "true", "false"):
+        raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知 source 或 refresh")
     conn = store.connect(config.db_path(root))
+    error = None
     try:
-        work_key = store.resolve_work(conn, work_key)
-        member, arxiv_id = _pick_record(conn, work_key)
-        record_uid = member["record_uid"]
-        remote_version = member["source_version"]
-        outcome = DownloadOutcome(work_key=work_key, record_uid=record_uid, arxiv_id=arxiv_id)
-        client = client or make_client()
-        requests_before, cost_before = client.requests, client.cost_usd
-        if refresh != "false" and remote_version is None:
-            remote_version = _learn_version(client, arxiv_id)
-            if remote_version:
-                with store.write_tx(conn):
-                    store.update_record(conn, record_uid, {"source_version": remote_version})
-        failures: list[dict] = []
-        pending: list[tuple] = []
-
-        for route in DOWNLOAD_PLANS[source]:
-            kind = DOWNLOAD_KINDS[route]
-            cached = store.artifact_of(conn, record_uid, kind)
-            usable = cached is not None and paths.byte_path(root, cached["sha256"]).is_file()
-            matched = usable and same_version(cached["source_version"], remote_version)
-            if refresh == "false" or (refresh == "auto" and matched):
-                if usable:
-                    outcome.artifacts.append(_reuse(root, cached))
-                    if source == "auto":
-                        break
-                    continue
-                reason = "本地没有这份产物，且 --refresh false 不联网"
-                failures.append({"kind": kind, "reason": reason})
-                outcome.artifacts.append(_artifact_entry(kind, "failed", source=route, reason=reason))
-                continue
-            # auto 钉住 record 声明的版本，true 取不带版本号的 URL（逃生口：不怕 HTML 重渲染，ADR-0067 决策 5）
-            version = remote_version if refresh == "auto" else None
-            headers = {}
-            if refresh == "true" and usable:
-                if cached["etag"]:
-                    headers["If-None-Match"] = cached["etag"]
-                if cached["last_modified"]:
-                    headers["If-Modified-Since"] = cached["last_modified"]
+        with store.write_tx(conn):
             try:
-                blob = arxiv_source.fetch_source(client, route, arxiv_id, version=version, headers=headers)
-            except SourceError as exc:
-                failures.append({"kind": kind, "reason": exc.reason})
-                outcome.artifacts.append(
-                    _artifact_entry(kind, "failed", source=route, reason=exc.reason)
-                )
-                continue
-            if blob.status == 304 and usable:
-                outcome.artifacts.append(_reuse(root, cached))
-                if source == "auto":
-                    break
-                continue
-            if blob.status != 200:
-                reason = "HTTP " + str(blob.status)
-                failures.append({"kind": kind, "reason": reason})
-                outcome.artifacts.append(_artifact_entry(kind, "failed", source=route, reason=reason))
-                continue
-            if not blob.content:
-                reason = "响应正文为空"
-                failures.append({"kind": kind, "reason": reason})
-                outcome.artifacts.append(_artifact_entry(kind, "failed", source=route, reason=reason))
-                continue
-            headers_lower = {key.lower(): value for key, value in blob.headers.items()}
-            sha = paths.store_bytes(root, blob.content)
-            # 取件那一刻 record 声明的版本；true 档拿到的可能更新，宁可低估也不误报「已是最新」
-            pending.append((kind, sha, remote_version, headers_lower.get("etag"),
-                            headers_lower.get("last-modified")))
-            outcome.artifacts.append(
-                _artifact_entry(
-                    kind, "fetched", source=route, sha256=sha, size=len(blob.content),
-                    source_version=remote_version, path=str(paths.byte_path(root, sha)),
-                )
-            )
-            if source == "auto":
-                break
-
-        requests = client.requests - requests_before
-        outcome.network = requests > 0
-        outcome.requests = requests
-        outcome.cost_usd = client.cost_usd - cost_before
-        outcome.cost_basis = client.cost_basis
-        served = [item for item in outcome.artifacts if item["status"] in ("fetched", "reused")]
-        if requests:
-            with store.write_tx(conn):
-                outcome.run_id = store.start_run(
-                    conn, spec_hash=None, query_name=None, refreshed=True,
-                    window_from=None, window_to=None,
-                )
-                for kind, sha, source_version, etag, last_modified in pending:
-                    store.add_artifact(
-                        conn, record_uid, kind, sha, None, None,
-                        source_version=source_version, etag=etag, last_modified=last_modified,
-                    )
-                store.finish_run(
-                    conn, outcome.run_id, status="ok" if served else "failed",
-                    requests=requests, cost_usd=outcome.cost_usd, cost_basis=client.cost_basis,
-                    counts={"artifacts": [item[0] for item in pending], "failures": failures},
-                )
-        if not served:
-            if refresh == "false":
-                raise envelope.EnvelopeError(
-                    envelope.PROJECTION_MISSING,
-                    "本地没有这份原件，且 --refresh false 不联网；去掉 --refresh false 重跑",
-                )
-            detail = "; ".join(item["kind"] + "=" + item["reason"] for item in failures)
-            raise envelope.EnvelopeError(envelope.SOURCE_ERROR, "取件失败：" + detail)
-
-        target = _work_projection(conn, root, work_key)
-        for item in served:
-            name = PROJECTION_NAMES.get(item["kind"])
-            if not name:
-                continue
-            paths.project_bytes(root, item["sha256"], target / name)
-            item["work_path"] = str(target / name)
+                outcome = _download_locked(root, work_key, source=source, refresh=refresh,
+                                           client=client or make_client(), conn=conn)
+            except envelope.EnvelopeError as exc:
+                error = exc
+        if error is not None:
+            raise error
         return outcome
     finally:
         conn.close()
 
 
+def _download_locked(root, work_key: str, *, source: str, refresh: str, client, conn,
+                     record_run: bool = True) -> DownloadOutcome:
+    """调用方持有写锁；read 的请求统一记入自己的 run。"""
+    if source not in DOWNLOAD_SOURCES or refresh not in ("auto", "true", "false"):
+        raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知 source 或 refresh")
+    work_key = store.resolve_work(conn, work_key)
+    member, arxiv_id = _pick_record(conn, work_key)
+    record_uid = member["record_uid"]
+    remote_version = member["source_version"]
+    outcome = DownloadOutcome(work_key=work_key, record_uid=record_uid, arxiv_id=arxiv_id)
+    client = client or make_client()
+    requests_before, cost_before = client.requests, client.cost_usd
+    if refresh != "false" and remote_version is None:
+        remote_version = _learn_version(client, arxiv_id)
+        if remote_version:
+            store.update_record(conn, record_uid, {"source_version": remote_version})
+    failures: list[dict] = []
+    pending: list[tuple] = []
+
+    for route in DOWNLOAD_PLANS[source]:
+        kind = DOWNLOAD_KINDS[route]
+        cached = store.artifact_of(conn, record_uid, kind)
+        usable = cached is not None and paths.byte_path(root, cached["sha256"]).is_file()
+        matched = usable and same_version(cached["source_version"], remote_version)
+        if refresh == "false" or (refresh == "auto" and matched):
+            if usable:
+                outcome.artifacts.append(_reuse(root, cached))
+                if source == "auto":
+                    break
+                continue
+            reason = "本地没有这份产物，且 --refresh false 不联网"
+            failures.append({"kind": kind, "reason": reason})
+            outcome.artifacts.append(_artifact_entry(kind, "failed", source=route, reason=reason))
+            continue
+        # auto 钉住 record 声明的版本，true 取不带版本号的 URL（逃生口：不怕 HTML 重渲染，ADR-0067 决策 5）
+        version = remote_version if refresh == "auto" else None
+        headers = {}
+        if refresh == "true" and usable:
+            if cached["etag"]:
+                headers["If-None-Match"] = cached["etag"]
+            if cached["last_modified"]:
+                headers["If-Modified-Since"] = cached["last_modified"]
+        try:
+            blob = arxiv_source.fetch_source(client, route, arxiv_id, version=version, headers=headers)
+        except SourceError as exc:
+            failures.append({"kind": kind, "reason": exc.reason})
+            outcome.artifacts.append(
+                _artifact_entry(kind, "failed", source=route, reason=exc.reason)
+            )
+            continue
+        if blob.status == 304 and usable:
+            outcome.artifacts.append(_reuse(root, cached))
+            if source == "auto":
+                break
+            continue
+        if blob.status != 200:
+            reason = "HTTP " + str(blob.status)
+            failures.append({"kind": kind, "reason": reason})
+            outcome.artifacts.append(_artifact_entry(kind, "failed", source=route, reason=reason))
+            continue
+        if not blob.content:
+            reason = "响应正文为空"
+            failures.append({"kind": kind, "reason": reason})
+            outcome.artifacts.append(_artifact_entry(kind, "failed", source=route, reason=reason))
+            continue
+        headers_lower = {key.lower(): value for key, value in blob.headers.items()}
+        sha = paths.store_bytes(root, blob.content)
+        # 取件那一刻 record 声明的版本；true 档拿到的可能更新，宁可低估也不误报「已是最新」
+        pending.append((kind, sha, remote_version, headers_lower.get("etag"),
+                        headers_lower.get("last-modified")))
+        outcome.artifacts.append(
+            _artifact_entry(
+                kind, "fetched", source=route, sha256=sha, size=len(blob.content),
+                source_version=remote_version, path=str(paths.byte_path(root, sha)),
+            )
+        )
+        if source == "auto":
+            break
+
+    requests = client.requests - requests_before
+    outcome.network = requests > 0
+    outcome.requests = requests
+    outcome.cost_usd = client.cost_usd - cost_before
+    outcome.cost_basis = client.cost_basis
+    served = [item for item in outcome.artifacts if item["status"] in ("fetched", "reused")]
+    for kind, sha, source_version, etag, last_modified in pending:
+        store.add_artifact(
+            conn, record_uid, kind, sha, None, None,
+            source_version=source_version, etag=etag, last_modified=last_modified,
+        )
+    if requests and record_run:
+        outcome.run_id = store.start_run(
+            conn, spec_hash=None, query_name=None, refreshed=True,
+            window_from=None, window_to=None,
+        )
+        store.finish_run(
+            conn, outcome.run_id, status="ok" if served else "failed",
+            requests=requests, cost_usd=outcome.cost_usd, cost_basis=client.cost_basis,
+            counts={"artifacts": [item[0] for item in pending], "failures": failures},
+        )
+    if not served:
+        if refresh == "false":
+            raise envelope.EnvelopeError(
+                envelope.PROJECTION_MISSING,
+                "本地没有这份原件，且 --refresh false 不联网；去掉 --refresh false 重跑",
+            )
+        detail = "; ".join(item["kind"] + "=" + item["reason"] for item in failures)
+        raise envelope.EnvelopeError(envelope.SOURCE_ERROR, "取件失败：" + detail)
+
+    target = _work_projection(conn, root, work_key)
+    for item in served:
+        name = PROJECTION_NAMES.get(item["kind"])
+        if not name:
+            continue
+        paths.project_bytes(root, item["sha256"], target / name)
+        item["work_path"] = str(target / name)
+    return outcome
+
 # --------------------------------------------------------------------------
-# textify：取原生文本源 → 转换（M1.5；落盘与 artifact 登记归 M2）
+# read：本地优先物化与定位器；textify 保留内部转换入口
 # --------------------------------------------------------------------------
 
 TEXTIFY_SOURCES = ("auto", "latex", "html")
@@ -1258,10 +1259,9 @@ HTML_MEDIA_MAX_BYTES = 8 * 1024 * 1024
 
 @dataclass
 class TextifyOutcome:
-    """一次文本化的产物。**不写库、不落 bytes/ 与 works/**——那是 M2 的全文通道。
+    """内部转换的产物。不写库、不落 bytes/ 与 works/；正式物化由 read 编排。
 
-    本阶段全部输出写在调用方给的 work_dir 里，markdown 直接带回调用方，
-    由调用方（M2 的 CLI / 本阶段的测试）决定写到哪儿。
+    输出写在调用方给的 work_dir 里，markdown 直接带回调用方。
     """
 
     work_key: str = ""
@@ -1309,9 +1309,11 @@ def _pick_record(conn, work_key: str, arxiv_id: str | None = None):
     )
 
 
-def _convert_latex(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str | None):
+def _convert_latex(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str | None,
+                   *, blob: bytes | None = None):
     """路线 A：e-print → 解包 → 主 .tex → pandoc → 归一化。"""
-    blob = arxiv_source.fetch_eprint(client, arxiv_id)
+    if blob is None:
+        blob = arxiv_source.fetch_eprint(client, arxiv_id)
     source_dir = str(base / "src")
     info = textify.unpack_eprint(blob, source_dir, name_hint=arxiv_id)
     if info["kind"] == "pdf":
@@ -1320,23 +1322,43 @@ def _convert_latex(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str
     with open(root_tex, "r", encoding="utf-8", errors="replace") as handle:
         tex_text = handle.read()
     media = str(base / "media")
+    # 预置原始媒体。Windows pandoc 可能只重写路径却因 I/O 警告未复制文件。
+    for name in textify.list_files(source_dir):
+        file = Path(source_dir) / name
+        if file.suffix.lower() not in (".pdf", ".png", ".jpg", ".jpeg", ".svg", ".eps",
+                                       ".ps", ".gif", ".webp", ".bmp", ".tif", ".tiff"):
+            continue
+        # pandoc 的资源基准是主 tex 的父目录。
+        destination = Path(media) / os.path.relpath(file, Path(root_tex).parent)
+        if not destination.resolve().is_relative_to(base.resolve()):
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(file, destination)
+    diagnostics = []
     raw = textify.run_pandoc(
         root_tex, media, pandoc=tool, reader="latex",
         bibliography=textify.find_bibliography(source_dir),
+        diagnostics=diagnostics,
     )
-    return textify.normalise_pandoc_output(
+    markdown, stats = textify.normalise_pandoc_output(
         raw, media, str(base / "figures"), tex_text=tex_text, pdftocairo=pdftocairo
     )
+    stats["pandoc_warnings"] = diagnostics
+    return markdown, stats
 
 
-def _convert_html(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str | None):
+def _convert_html(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str | None,
+                  *, raw_html: str | None = None):
     """路线 B：/html/<id> → LaTeXML 清洗 → 图件本地化 → pandoc → 归一化。"""
-    cleaned, clean_stats = htmlclean.clean_latexml(arxiv_source.fetch_html(client, arxiv_id))
+    if raw_html is None:
+        raw_html = arxiv_source.fetch_html(client, arxiv_id)
+    cleaned, clean_stats = htmlclean.clean_latexml(raw_html)
     media = base / "html"
     media.mkdir(parents=True, exist_ok=True)
     entries = htmlclean.collect_media(cleaned, base_url=arxiv_source.html_url(arxiv_id))
     mapping: dict = {}
     missing = 0
+    media_inputs = []
     for index, entry in enumerate(entries, start=1):
         name = htmlclean.media_name(entry, index)
         try:
@@ -1348,6 +1370,7 @@ def _convert_html(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str 
                     missing += 1
                     continue
                 (media / name).write_bytes(blob.content)
+                media_inputs.append({"url": entry["url"], "file": str(media / name)})
         except SourceError:
             missing += 1
             continue
@@ -1355,14 +1378,167 @@ def _convert_html(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str 
     source_file = str(media / "paper.html")
     with open(source_file, "w", encoding="utf-8") as handle:
         handle.write(htmlclean.rewrite_media(cleaned, mapping))
+    diagnostics = []
     markdown, stats = textify.normalise_pandoc_output(
-        textify.run_pandoc(source_file, str(media), pandoc=tool, reader="html"),
+        textify.run_pandoc(source_file, str(media), pandoc=tool, reader="html", diagnostics=diagnostics),
         str(media), str(base / "figures"), pdftocairo=pdftocairo,
     )
     clean_stats["media_total"] = len(entries)
     clean_stats["media_missing"] = missing
     stats["html"] = clean_stats
+    stats["_media"] = media_inputs
+    stats["pandoc_warnings"] = diagnostics
     return markdown, stats
+
+
+def run_read(root, work_key: str, *, refresh: str = "auto", client=None,
+             pandoc: str | None = None, pdftocairo: str | None = None) -> dict:
+    """正文定位器；取写锁后复用、转换或取件，一次调用只记一条 run。"""
+    if refresh not in ("auto", "true", "false"):
+        raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知 --refresh：" + str(refresh))
+    root = Path(root).resolve()
+    conn = store.connect(config.db_path(root))
+    client = client or make_client()
+    before, cost_before = client.requests, client.cost_usd
+    error, data = None, None
+    try:
+        with store.write_tx(conn):
+            run_id = store.start_run(conn, spec_hash=None, query_name=None, refreshed=False,
+                                     window_from=None, window_to=None)
+            try:
+                data = _read_locked(conn, root, work_key, refresh=refresh, client=client,
+                                    pandoc=pandoc, pdftocairo=pdftocairo)
+            except envelope.EnvelopeError as exc:
+                error = exc
+            except OSError as exc:
+                error = envelope.EnvelopeError(envelope.IO_ERROR, "正文读写失败：" + str(exc))
+            requests = client.requests - before
+            cost = {"usd": round(client.cost_usd - cost_before, 6),
+                    "basis": client.cost_basis if requests else "本次未联网", "requests": requests}
+            store.finish_run(conn, run_id, status="failed" if error else "ok",
+                             requests=requests, cost_usd=cost["usd"], cost_basis=cost["basis"],
+                             refreshed=requests > 0,
+                             counts={"command": "read", "work_key": work_key,
+                                     "failures": [{"reason": error.message}] if error else [],
+                                     "warnings": data.get("warnings", []) if data else []})
+        if error:
+            raise error
+        data.update(network=requests > 0, cost=cost)
+        return data
+    finally:
+        conn.close()
+
+
+def _read_locked(conn, root, work_key, *, refresh, client, pandoc, pdftocairo):
+    work_key = store.resolve_work(conn, work_key)
+    member, arxiv_id = _pick_record(conn, work_key)
+    uid = member["record_uid"]
+    known = paper.bundles(conn, root, uid)
+    previous = known[0] if known else None
+    tool = pandoc or textify.find_pandoc(root)
+    renderer = pdftocairo if pdftocairo is not None else textify.find_pdftocairo(root)
+    version = (textify.converter_version(tool, textify.renderer_id(renderer))
+               + "|" + paper.READER_VERSION) if tool else None
+    version_known = version is not None and not version.startswith("unknown|")
+    if previous and paper.complete(root, previous) and refresh != "true":
+        raw = store.artifact_of(conn, uid, previous["source"]["kind"])
+        raw_changed = (raw is not None and paths.byte_path(root, raw["sha256"]).is_file()
+                       and (raw["sha256"] != previous["source"]["sha256"]
+                            or raw["source_version"] != previous["source"]["version"]))
+        converter_changed = version_known and version != previous["converter_version"]
+        local_inputs = any(
+            row is not None and paths.byte_path(root, row["sha256"]).is_file()
+            for row in (store.artifact_of(conn, uid, kind)
+                        for kind in ("source_tar_gz", "source_html"))
+        )
+        if (not raw_changed and not converter_changed) or (not local_inputs and refresh == "false"):
+            data = _read_locator(conn, root, work_key, previous, member["source_version"])
+            if not version_known:
+                data.setdefault("warnings", []).append("pandoc 不可用或版本无法确认，复用已有正文；未检查转换器更新")
+            elif converter_changed and not local_inputs:
+                data.setdefault("warnings", []).append("转换器已变化，但本地缺少原件；离线复用已有正文")
+            return data
+    if not tool:
+        raise envelope.EnvelopeError(
+            envelope.SOURCE_ERROR,
+            "没有 pandoc：设 ACADEMIC_SEARCH_PANDOC、放 vendor/pandoc/ 或装到 PATH",
+        )
+    attempts, has_source, attempted_inputs = [], False, set()
+    local_routes = []
+    for route in ("latex", "html"):
+        row = store.artifact_of(conn, uid, DOWNLOAD_KINDS[route])
+        if row is not None and paths.byte_path(root, row["sha256"]).is_file():
+            local_routes.append(route)
+    # 先用所有本地候选，不能因缺 LaTeX 而在已有 HTML 时先联网。
+    plan = [(route, False) for route in local_routes] if refresh != "true" else []
+    if refresh != "false":
+        plan += [(route, True) for route in ("latex", "html")]
+    for route, fetch in plan:
+        kind = DOWNLOAD_KINDS[route]
+        raw = store.artifact_of(conn, uid, kind)
+        try:
+            if fetch:
+                _download_locked(root, work_key, source=route, refresh=refresh,
+                                 client=client, conn=conn, record_run=False)
+                raw = store.artifact_of(conn, uid, kind)
+            if (route, raw["sha256"]) in attempted_inputs:
+                continue
+            attempted_inputs.add((route, raw["sha256"]))
+            has_source = True
+            source_version = raw["source_version"]
+            source_id = identity.normalize_source_id("arxiv", arxiv_id) + (source_version or "")
+            source_url = arxiv_source.source_url(route, arxiv_id, version=source_version)
+            source = {"kind": kind, "sha256": raw["sha256"],
+                      "version": source_version, "url": source_url}
+            # 输入媒体只能复用同一 HTML 原件的清单，不能混用历史媒体。
+            media = next((bundle["media"] for bundle in known
+                          if bundle["source"]["sha256"] == raw["sha256"]), [])
+            media_client = paper.MediaClient(conn, root, uid, source_version, client,
+                                            offline=refresh == "false",
+                                            cached=media if refresh != "true" else ())
+            temp_parent = root / "data" / "tmp"
+            temp_parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="read-", dir=temp_parent) as directory:
+                base = Path(directory)
+                blob = paths.byte_path(root, raw["sha256"]).read_bytes()
+                if route == "latex":
+                    markdown, stats = _convert_latex(media_client, source_id, base, tool,
+                                                      renderer, blob=blob)
+                else:
+                    markdown, stats = _convert_html(media_client, source_id, base, tool,
+                                                     renderer, raw_html=blob.decode("utf-8", "replace"))
+                if not markdown.strip():
+                    raise textify.TextifyError("empty_document", "转换后的正文为空")
+                record = store.get_record(conn, uid)
+                identifiers = store.idents_of(conn, uid)
+                front = {"title": record["title"], "arxiv_id": source_id,
+                         "doi": next((item["value"] for item in identifiers if item["ns"] == "doi"), None),
+                         "source_url": source_url, "source_version": source_version,
+                         "converter_version": version, "converted_at": store.utcnow(), "license": None}
+                warnings = ["LaTeX 路线失败，回退 HTML：" + item for item in attempts]
+                bundle = paper.save(conn, root, uid, markdown=markdown, stats=stats, base=base,
+                                    source=source, converter_version=version,
+                                    front_matter=front, warnings=warnings)
+            remote = store.get_record(conn, uid)["source_version"]
+            return _read_locator(conn, root, work_key, bundle, remote)
+        except (textify.TextifyError, SourceError) as exc:
+            attempts.append(route + "=" + str(exc))
+        except envelope.EnvelopeError as exc:
+            if exc.code not in (envelope.SOURCE_ERROR, envelope.PROJECTION_MISSING):
+                raise
+            attempts.append(route + "=" + exc.message)
+    if refresh == "false" and not has_source:
+        raise envelope.EnvelopeError(envelope.PROJECTION_MISSING,
+                                     "本地没有正文或可转换的原件；去掉 --refresh false 重跑")
+    raise envelope.EnvelopeError(envelope.SOURCE_ERROR, "正文物化失败：" + "; ".join(attempts))
+
+
+def _read_locator(conn, root, work_key, bundle, remote):
+    try:
+        target = _work_projection(conn, root, work_key)
+    except OSError:
+        target = paths.work_dir(root, store.projection_name(conn, work_key))
+    return paper.locator(root, work_key, bundle, remote, target)
 
 
 def run_textify(
@@ -1378,10 +1554,10 @@ def run_textify(
 ) -> TextifyOutcome:
     """取原生文本源并转 Markdown；全程只写 work_dir。
 
-    契约：docs/03-接口契约.md 的 textify 行、ADR-0056 决策 3、EX-2026-10-14-文本化 §7。
+    装配规则：ADR-0056 决策 3、EX-2026-10-14-文本化 §7。
     auto = 先 LaTeX 源码、失败再 HTML；latex / html 指定即不回退。
-    **本阶段不落 bytes/、不投影 works/、不登记 artifact、不做缓存命中**——那是 M2 的
-    「全文按需取用通道」。
+    此内部入口不落 bytes/、不投影 works/、不登记 artifact、不做缓存命中；
+    CLI 的正式入口 run_read 负责这些步骤。
     """
     if source not in TEXTIFY_SOURCES:
         raise envelope.EnvelopeError(envelope.INVALID_ARGS, "未知 --source：" + str(source))

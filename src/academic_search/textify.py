@@ -224,6 +224,7 @@ def list_files(directory: str) -> list[str]:
 
 def _hinted(name_hint: str | None, suffix: str) -> str:
     stem = (name_hint or "main").strip() or "main"
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem)
     return stem if stem.lower().endswith(suffix) else stem + suffix
 
 
@@ -251,7 +252,10 @@ def unpack_eprint(data: bytes, dest_dir: str, *, name_hint: str | None = None) -
         return {"kind": "gzip", "files": [_write(_hinted(name_hint, suffix), dest_dir, raw)]}
     if data[:5] == b"%PDF-":
         return {"kind": "pdf", "files": [_write(_hinted(name_hint, ".pdf"), dest_dir, data)]}
-    if data.lstrip()[:1] == b"%":  # 以 TeX 注释开头 = 纯 .tex
+    if _looks_like_tar(data):
+        _extract_tar(data, dest_dir)
+        return {"kind": "tarball", "files": list_files(dest_dir)}
+    if data.lstrip()[:1] == b"%" or b"\\documentclass" in data[:200000]:
         return {"kind": "tex", "files": [_write(_hinted(name_hint, ".tex"), dest_dir, data)]}
     return {"kind": "unknown", "files": [_write(_hinted(name_hint, ".bin"), dest_dir, data)]}
 
@@ -477,8 +481,10 @@ def normalise_figures(
         lines = []
         if parser.ids:
             lines.append("<!-- id:" + parser.ids[0] + " -->")
-        for image in parser.images:
+        for index, image in enumerate(parser.images):
             alt = image["alt"] or os.path.splitext(os.path.basename(image["src"]))[0]
+            if parser.captions and (not image["alt"] or image["alt"].lower() == "refer to caption"):
+                alt = parser.captions[min(index, len(parser.captions) - 1)]
             lines.append("![" + alt + "](" + localise(image["src"]) + ")")
             stats["images"] += 1
         if parser.captions and len(parser.captions) > 1:
@@ -830,8 +836,10 @@ def normalise_pandoc_output(
 def run_pandoc(
     source_file: str, out_media_dir: str, *, pandoc: str, reader: str = "latex",
     bibliography: str | None = None, source_dir: str | None = None, timeout: int = 300,
+    diagnostics: list[str] | None = None,
 ) -> str:
     """调 pandoc 产出 Markdown 原文；reader 取 latex（路线 A）或 html（路线 B）。"""
+    os.makedirs(out_media_dir, exist_ok=True)
     command = [
         pandoc, os.path.basename(source_file), "-f", reader, "-t", WRITER, "--wrap=none",
         "--extract-media=" + out_media_dir,
@@ -852,4 +860,8 @@ def run_pandoc(
                 "utf-8", "replace"
             ),
         )
+    if diagnostics is not None:
+        messages = (proc.stderr or b"").decode("utf-8", "replace").strip()
+        if messages:
+            diagnostics.append(messages[:2000])
     return (proc.stdout or b"").decode("utf-8", "replace")

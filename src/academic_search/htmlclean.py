@@ -160,8 +160,6 @@ def collect_media(html_text: str, base_url: str = "") -> list[dict]:
                     "path": value,
                 })
                 continue
-            if value.startswith("/"):
-                continue  # 站点内资源；正文容器里的这类已经被清洗摘掉
             seen.add(value)
             entries.append({
                 "kind": "remote", "src": value,
@@ -172,8 +170,6 @@ def collect_media(html_text: str, base_url: str = "") -> list[dict]:
 
 def rewrite_media(html_text: str, mapping: dict) -> str:
     """把命中的 src / data 换成映射里的本地文件名。"""
-    if not mapping:
-        return html_text
     LH = _lxml()
     try:
         doc = LH.fromstring(html_text)
@@ -185,4 +181,12 @@ def rewrite_media(html_text: str, mapping: dict) -> str:
         for attr in MEDIA_ATTRS:
             if element.get(attr) in mapping:
                 element.set(attr, mapping[element.get(attr)])
+        # pandoc 的 HTML reader 会丢掉 object 中的 SVG；转成同等的图片元素。
+        if element.tag in ("object", "embed"):
+            source = element.get("data") or element.get("src")
+            if source:
+                element.tag = "img"
+                element.set("src", source)
+                element.attrib.pop("data", None)
+                element.attrib.pop("type", None)
     return LH.tostring(doc, encoding="unicode")

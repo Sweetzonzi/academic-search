@@ -87,6 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     download.add_argument("--refresh", choices=["auto", "true", "false"], default="auto")
 
+    read = sub.add_parser("read", help="从 arXiv LaTeX / HTML 物化正文，返回路径、章节与图件定位器")
+    read.add_argument("--work", required=True, metavar="work_key")
+    read.add_argument("--refresh", choices=["auto", "true", "false"], default="auto")
+
     profile = sub.add_parser("profile", help="画像的只读通道")
     profile_sub = profile.add_subparsers(dest="subcommand", required=True)
     profile_sub.add_parser("show")
@@ -159,6 +163,9 @@ def _dispatch(args, name: str):
     if name == "download":
         outcome = service.run_download(root, args.work, source=args.source, refresh=args.refresh)
         return outcome.payload(), 0
+
+    if name == "read":
+        return service.run_read(root, args.work, refresh=args.refresh), 0
 
     if name == "sync":
         outcome = service.run_sync(root, queries=list(args.query), refresh=args.refresh)

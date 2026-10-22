@@ -611,7 +611,7 @@ def add_artifact(
     etag: str | None = None,
     last_modified: str | None = None,
 ) -> None:
-    """登记一份产物；同一 `(record_uid, kind, sha256)` 再登记只补空列、不抹已有值。
+    """登记一份产物；同键用新非 NULL 元数据更新，并推进最近登记顺序。
 
     三元组本身就是幂等键，因此「同一份字节再取一次」不会长出第二行；
     换转换器重转出同一份字节时，新给的非 NULL 值会写进去（IFACE-DATA §3.7）。
@@ -622,6 +622,7 @@ def add_artifact(
                               source_version, etag, last_modified)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (record_uid, kind, sha256) DO UPDATE SET
+            rowid = (SELECT COALESCE(MAX(rowid), 0) + 1 FROM artifact),
             converter = coalesce(excluded.converter, artifact.converter),
             converter_version = coalesce(excluded.converter_version, artifact.converter_version),
             source_version = coalesce(excluded.source_version, artifact.source_version),
@@ -653,6 +654,14 @@ def artifact_of(
         """,
         (record_uid, kind, converter_version),
     ).fetchone()
+
+
+def artifacts_of(conn: sqlite3.Connection, record_uid: str, kind: str) -> list[sqlite3.Row]:
+    """按最近登记顺序列产物；转换清单需要同时校验其成员。"""
+    return conn.execute(
+        "SELECT * FROM artifact WHERE record_uid = ? AND kind = ? ORDER BY rowid DESC",
+        (record_uid, kind),
+    ).fetchall()
 
 
 def add_derived(

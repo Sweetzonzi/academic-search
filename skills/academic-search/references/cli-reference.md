@@ -218,7 +218,7 @@ scripts/run.cmd sync --refresh false
 
 - **CLI 从不写配置**：新建与修改由 agent 直接编辑 `config/profile.toml`，改完跑 `profile check`。
 - **每条 query 至少给 `all_of` 或 `any_of` 一组**，这是硬校验，实测 `profile check` 会报错——与 §1 的「空检索式 = 列全部」不是一回事。
-- 没有 `config/profile.toml` 时 `profile show` 返回 `error.code=no_profile`。创建流程见 SKILL.md §4，字段见 §9。
+- 没有 `config/profile.toml` 时 `profile show` 返回 `error.code=no_profile`。创建流程见 SKILL.md §5，字段见 §9。
 
 ---
 
@@ -329,7 +329,7 @@ expires = "2026-12-31"
 |---|---|---|---|
 | `busy` | 写锁被占用（另一个 run 在跑） | ✅ 稍后一次 | — |
 | `projection_missing` | 本地没有这篇的正文，且此时不允许联网 | ❌ | 去掉 `--refresh false` 重跑，或先 `download --work <work_key>` |
-| `no_profile` | 没有 `config/profile.toml` | ❌ | 按 SKILL.md §4 创建 |
+| `no_profile` | 没有 `config/profile.toml` | ❌ | 按 SKILL.md §5 创建 |
 | `profile_invalid` | 解析失败（附出错行） | ❌ | 修文件后重跑 `profile check` |
 | `invalid_args` | 参数不合法 | ❌ | 改参数 |
 | `not_found` | 标识或 `work_key` 未命中 | ❌ | 换标识，或先 `search` 联网取 |
@@ -342,4 +342,25 @@ expires = "2026-12-31"
 
 可重试的**只重试一次**。启动器失败可能没有信封，先用 [launcher 诊断](setup.md#4-分层自检)定位；`version` / `profile` 成功不证明数据库或网络可用。`source_error` / `network_error` / `rate_limited` 在**仍产出结果**时不走本表，只记进 `counts.failures[]` / `degraded`。
 
-**缺 pandoc 也报 `source_error`**，但那不是网络问题、重试无用——按 `error.message` 把它装好（获取方式与三处查找顺序见 SKILL.md §7）。
+**缺 pandoc 也报 `source_error`**，但那不是网络问题、重试无用——按 `error.message` 把它装好（获取方式与三处查找顺序见 SKILL.md §8）。
+
+## 11. `read`
+
+把 arXiv LaTeX 源码或 HTML 转成 Markdown，返回定位器。agent 读取转换后的 Markdown 与图件，无需先 `download` 或自行解析原始文件；精读流程见 [SKILL.md §4](../SKILL.md#4-论文精读)。CLI 不调用 LLM。
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--work work_key` | 必填 | 来自 `lookup` / `search` 的作品身份；不接受本地 PDF 路径 |
+| `--refresh auto\|true\|false` | `auto` | `auto` 复用正文，原件或可用转换器变化时重转；元数据升版只标 `stale`。`true` 联网更新原件再转换，失败即报错。`false` 只用本地缓存和原件，可重建投影 |
+
+```text
+scripts/run.cmd read --work <work_key> --refresh auto
+scripts/run.cmd read --work <work_key> --refresh false
+scripts/run.cmd read --work <work_key> --refresh true
+```
+
+- `data.doc.path` 是 `bytes/` 中保证存在的正文，`doc.work_path` 是可选的人读投影。`sha256` 标识本次正文；`source_version` / `remote_version` 分别是本地产物与元数据的来源版本，未知侧为 `null`。只有两侧均已知且不等时 `stale=true`。
+- `anchors[]` 给出章节标签和从 1 起算的行号；定位后分段读。`figures[]` 给出正文引用名 `ref`、图件 `path`、图注 `caption` 和哈希；按映射打开图片，不能从正文的 `bytes/` 路径拼相对图路径。
+- `front_matter` 标明题名、标识、原件 URL、转换时间与转换器版本；`network` / `cost` 包含本次取件和媒体请求。第一次 HTML 转换可能需要多次图件请求；只对需要精读的论文调用。
+- 本地原件优先使用；LaTeX 转换失败可回退 HTML。HTML 媒体也能缓存，离线缺媒体时保留正文并提示缺图。正文、图件与图注通过同一转换清单绑定，删掉 `works/` 后重跑即可离线重建。
+- 有可用正文但缺图、引用未解析或公式尚未验证时，成功信封带 `warnings`，不代表内容完整。两条路线均失败或正文为空时报 `source_error`；离线无正文与原件时报 `projection_missing`。缺 pandoc 时可读已有完整缓存，无可读缓存则 `source_error`。

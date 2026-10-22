@@ -21,12 +21,14 @@ def _find_real_pandoc() -> str:
     `vendor/pandoc/` → PATH）。按可信度排序：
 
     1. `ACADEMIC_SEARCH_PANDOC` —— 显式指定，跨机可配；
-    2. PATH 上的 `pandoc`；
-    3. 当前解释器自带的 `pypandoc`（`pip install pypandoc_binary` 会带一个）；
-    4. DSH 内置 runtime 自带的副本——用 `$DSH_HOME` 定位、按通配符找运行时候选，
+    2. 仓库 vendor/pandoc/ 中的便携副本；
+    3. PATH 上的 `pandoc`；
+    4. 当前解释器自带的 `pypandoc`（`pip install pypandoc_binary` 会带一个）；
+    5. DSH 内置 runtime 自带的副本——用 `$DSH_HOME` 定位、按通配符找运行时候选，
        **不把任何用户目录写进仓库**。
     """
-    candidates = [os.environ.get("ACADEMIC_SEARCH_PANDOC") or "", shutil.which("pandoc") or ""]
+    vendor = _SRC.parent / "vendor" / "pandoc" / ("pandoc.exe" if os.name == "nt" else "pandoc")
+    candidates = [os.environ.get("ACADEMIC_SEARCH_PANDOC") or "", str(vendor), shutil.which("pandoc") or ""]
     try:
         import pypandoc  # type: ignore
 

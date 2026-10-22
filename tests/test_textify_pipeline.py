@@ -72,7 +72,7 @@ def make_work(root, arxiv_id: str = "2610.00001v1", source: str = "arxiv"):
 
 def stub_pandoc(text: str):
     def run(source_file, out_media_dir, *, pandoc, reader="latex",
-            bibliography=None, source_dir=None, timeout=300):
+            bibliography=None, source_dir=None, timeout=300, diagnostics=None):
         return text
     return run
 
@@ -201,7 +201,14 @@ def test_collect_media_inline_and_remote():
     out = htmlclean.rewrite_media(
         raw, {"2610.1/figs/a.png": "01-a.png", inline: "02-inline.svg"}
     )
-    assert 'src="01-a.png"' in out and 'data="02-inline.svg"' in out
+    assert 'src="01-a.png"' in out and 'src="02-inline.svg"' in out
+    assert '<object' not in out
+
+
+def test_missing_svg_object_is_still_an_image_for_loss_reporting():
+    pytest.importorskip("lxml")
+    out = htmlclean.rewrite_media('<figure><object data="missing.svg"></object></figure>', {})
+    assert '<object' not in out and 'src="missing.svg"' in out
 
 
 # --------------------------------------------------------------- 编排
