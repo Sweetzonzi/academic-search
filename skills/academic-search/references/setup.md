@@ -4,7 +4,7 @@
 
 ## 1. 安装与路径绑定
 
-保留一份完整代码仓库，把 `skills/academic-search/` 复制到宿主的 skill 目录。安装的是薄 bundle，代码和数据仍在仓库；更新技能时重新复制 `SKILL.md`、`references/` 和 `scripts/`，保留本机绑定。
+保留一份完整代码仓库，把 `skills/academic-search/` 复制到宿主的 skill 目录。安装的是薄 bundle，代码和数据仍在仓库；更新技能时重新复制 `SKILL.md`、`references/` 和 `scripts/`，保留本机绑定。仓库内可直接跑 `tools/install_skill.py` 完成安装或更新：它只同步这三项，保留 `root.txt`，把被替换的副本备份到 `skills.backup/`，并支持 `--check` 只比差异、`--dest` 指定安装目录。
 
 仓库根按 `--root` → `ACADEMIC_SEARCH_ROOT` → bundle 的 `root.txt` 第一行 → bundle 上两级目录解析。`--root <路径>` 或 `--root=<路径>` 必须在子命令前。仓库根须含 `src/academic_search/__init__.py`；它同时决定 `config/`、`data/`、`bytes/` 和 `works/` 的位置，**不是任意可写数据目录**。路径使用实际执行环境能访问的绝对路径；Windows 的盘符路径不能直接用于远端 Linux 容器。
 

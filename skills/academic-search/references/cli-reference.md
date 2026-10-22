@@ -359,8 +359,8 @@ scripts/run.cmd read --work <work_key> --refresh false
 scripts/run.cmd read --work <work_key> --refresh true
 ```
 
-- `data.doc.path` 是 `bytes/` 中保证存在的正文，`doc.work_path` 是可选的人读投影。`sha256` 标识本次正文；`source_version` / `remote_version` 分别是本地产物与元数据的来源版本，未知侧为 `null`。只有两侧均已知且不等时 `stale=true`。
-- `anchors[]` 给出章节标签和从 1 起算的行号；定位后分段读。`figures[]` 给出正文引用名 `ref`、图件 `path`、图注 `caption` 和哈希；按映射打开图片，不能从正文的 `bytes/` 路径拼相对图路径。
+- 人和 agent 均优先读 `data.doc.work_path`（`works/<proj>/paper.md`），图片从同目录按相对引用打开；投影不可用时才用保证存在的 `doc.path`（`bytes/`）。正文逐字节相同，`sha256` 标识本次正文；`source_version` / `remote_version` 分别是本地产物与元数据的来源版本，未知侧为 `null`。只有两侧均已知且不等时 `stale=true`。
+- `anchors[]` 给出章节标签和从 1 起算的行号；定位后分段读。`figures[]` 给出正文引用名 `ref`、图件 `path`、图注 `caption` 和哈希；回退到 `bytes/` 阅读时按映射取图，不能从正文的 `bytes/` 路径拼相对图路径。正文与图件均只读，笔记另存。
 - `front_matter` 标明题名、标识、原件 URL、转换时间与转换器版本；`network` / `cost` 包含本次取件和媒体请求。第一次 HTML 转换可能需要多次图件请求；只对需要精读的论文调用。
 - 本地原件优先使用；LaTeX 转换失败可回退 HTML。HTML 媒体也能缓存，离线缺媒体时保留正文并提示缺图。正文、图件与图注通过同一转换清单绑定，删掉 `works/` 后重跑即可离线重建。
 - 有可用正文但缺图、引用未解析或公式尚未验证时，成功信封带 `warnings`，不代表内容完整。两条路线均失败或正文为空时报 `source_error`；离线无正文与原件时报 `projection_missing`。缺 pandoc 时可读已有完整缓存，无可读缓存则 `source_error`。

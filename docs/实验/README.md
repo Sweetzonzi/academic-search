@@ -25,5 +25,6 @@ title: 实验记录注册表
 | [EX-2026-10-21-warnings](EX-2026-10-21-返回提示.md) | 2026-10-21 | warnings 的真实启动器与 OpenAlex 验收 | [IFACE-PAYLOAD §2](../接口/输出载荷.md) |
 | [EX-2026-10-22-initialization](EX-2026-10-22-技能初始化.md) | 2026-10-22 | 启动器回归、安装副本的空库自检与 OpenAlex 权限边界 | [IFACE-SKILL](../接口/交付物-skill打包.md) |
 | [EX-2026-10-22-read](EX-2026-10-22-read.md) | 2026-10-22 | 真实 arXiv 源码 / HTML 读取、图件、缓存与离线重建 | [ADR-0074](../决策/ADR-0074.md)、`read` 定位器与阅读闭环 |
+| [EX-2026-10-22-read-fidelity](EX-2026-10-22-read-fidelity.md) | 2026-10-22 | OverSeer 摘要、表头残留、附录与表格引用、多文献库及 11 张图的离线回归 | [IFACE-PAYLOAD §5.2](../接口/输出载荷.md)、[论文精读](../../skills/academic-search/SKILL.md#4-论文精读) |
 
 > 更新规则：新增实验时只追加行，不改动既有行。

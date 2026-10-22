@@ -155,7 +155,7 @@ $env:PYTHONIOENCODING='utf-8'
 
 ## 8. 实验目录：`experiments/` —— 脚本与证据
 
-`experiments/<里程碑>/` 存放**设计期的实验**，`experiments/m1.5/` 保存设计实验，`experiments/m2/` 保存阅读验收。**进版本库**：实验脚本 `00`–`27`、调研素材 `_openalex-identity/`。**不进版本库**：下载的样本 `2610.*/`、产物 `textified*/` 与 `out/`、缓存 `_cache/`。`.gitignore` 用白名单（`experiments/*/*` + `!experiments/*/*.py` + `!experiments/*/_openalex-identity/`），**新增实验子目录时不需要改它**。
+`experiments/<里程碑>/` 存放**设计期的实验**，`experiments/m1.5/` 保存设计实验，`experiments/m2/` 保存阅读验收。**进版本库**：实验脚本 `00`–`28`、调研素材 `_openalex-identity/`。**不进版本库**：下载的样本 `2610.*/`、产物 `textified*/` 与 `out/`、缓存 `_cache/`。`.gitignore` 用白名单（`experiments/*/*` + `!experiments/*/*.py` + `!experiments/*/_openalex-identity/`），**新增实验子目录时不需要改它**。
 
 **为什么脚本不放在 `data/`**：`data/`（sidecar DB、`runs/` 留档）与同级的 `bytes/`、`works/` 都是本地数据——不进版本库，可由重抓、重投影恢复或按引用计数 GC，其中 `sidecar.db` 与 `bytes/` 是主要资产、**不整体清理**；而实验脚本是文档里那些数字的**唯一复现路径**，不可再生。两者的生命周期相反，一条规则表达不了。
 
@@ -174,6 +174,7 @@ $env:PYTHONIOENCODING='utf-8'
 | `24` | 正文检索走文件扫描的成本（24 篇 / 3.21 MB；命中 12.3 ms、无命中 11.6 ms） | `ADR-0036` 的实测依据 |
 | `26` | 会名 → OpenAlex source id 的确认：列候选 / 看逐年覆盖 / 核当年作品数 | `src/academic_search/venues.toml` 的每条 `ids`、`EX-2026-10-16-source-contract` §16(a) |
 | `27` | 正文读取：真实 pandoc、arXiv 双路线、缓存与投影重建（`experiments/m2/`） | `EX-2026-10-22-read` |
+| `28` | OverSeer 阅读保真：摘要、多文件标签、附录、多文献库及投影图件（`experiments/m2/`） | `EX-2026-10-22-read-fidelity` |
 
 **规则：清理只删"死物"，不删证据。**
 

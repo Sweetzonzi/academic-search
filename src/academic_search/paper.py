@@ -14,7 +14,7 @@ from . import envelope, paths, store
 from .sources import SourceError
 from .sources.http import HttpBytesResponse
 
-READER_VERSION = "read@1"
+READER_VERSION = "read@3"
 IMAGE = re.compile(r"!\[((?:\\.|[^\n])*?)\]\(([^)\n]+)\)")
 ANCHOR = re.compile(r"^<!-- (sec|page):\s*(.*?)\s*-->$")
 
@@ -114,6 +114,9 @@ def save(conn, root, record_uid: str, *, markdown: str, stats: dict, base: Path,
             warnings.append(label + "：" + str(count))
     if stats.get("refs", {}).get("unresolved"):
         warnings.append("未解析交叉引用：" + str(stats["refs"]["unresolved"]))
+    if stats.get("anchors", {}).get("unmatched_heads"):
+        warnings.append("章节标题未与源码对齐，使用标题定位而非推定编号："
+                        + str(stats["anchors"]["unmatched_heads"]))
     if source["kind"] == "source_html":
         warnings.append("HTML 公式的自定义宏与布局未全面验证；涉及公式的结论须核对原件")
         missing = stats.get("html", {}).get("media_missing", 0)

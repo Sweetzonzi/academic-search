@@ -19,6 +19,8 @@ import subprocess
 import tarfile
 from html.parser import HTMLParser
 
+from . import latex
+
 #: pandoc 输出方言：固定值；gfm 会把行间公式变成代码块，markdown 会丢表格（EX §4.2）。
 WRITER = "commonmark_x+tex_math_dollars+pipe_tables+footnotes+implicit_figures"
 
@@ -176,11 +178,6 @@ def find_root_tex(directory: str, arxiv_id: str | None = None) -> str:
     if len(texs) == 1:
         return texs[0]
     raise TextifyError("no_root_tex", "在 " + directory + " 找不到根 .tex")
-
-
-def find_bibliography(directory: str) -> str | None:
-    matches = sorted(_glob.glob(os.path.join(directory, "*.bib")))
-    return matches[0] if matches else None
 
 
 # --------------------------------------------------------------------------
@@ -499,7 +496,7 @@ def normalise_figures(
 # 锚点注入
 # --------------------------------------------------------------------------
 
-_HEAD_ATTR = re.compile(r"^(#{1,6}) +(.+?)(?: +\{#([^}]+)\})? *$")
+_HEAD_ATTR = re.compile(r"^(#{1,6}) +(.+?)(?: +\{([^}]+)\})? *$")
 _ANCHOR_ID = re.compile(r"^<!-- id:(\S+) -->$")
 _FENCE_DIV = re.compile(r"^:::\s*(?:\{([^}]*)\})?\s*$")
 _DIV_ID = re.compile(r"#(\S+)")
@@ -519,7 +516,8 @@ THEOREM_CLASSES = {
 ALGORITHM_CLASSES = {"algorithm", "algorithm2e", "pseudocode"}
 
 
-def inject_anchors(text: str) -> tuple[str, dict, dict]:
+def inject_anchors(text: str, source_map: dict | None = None,
+                   source_sections: list[dict] | None = None) -> tuple[str, dict, dict]:
     """给节/公式/图/表/伪代码编号，并建立 label → (kind, number)。"""
     counters = {"sec": [0] * 6, "eq": 0, "fig": 0, "tbl": 0, "alg": 0, "env": 0}
     heads = [0] * 6
@@ -530,6 +528,34 @@ def inject_anchors(text: str) -> tuple[str, dict, dict]:
     prev_was_row = False
     div_stack: list[dict] = []
     lines = text.split("\n")
+    source_position = 0
+    numbered_ancestors: dict[int, tuple[str, str]] = {}
+    unmatched_heads = 0
+
+    def title_matches(source_title, rendered_title, allow_macro):
+        words = lambda value: re.findall(r"\w+", value.casefold())
+        source_words = words(re.sub(r"\\[A-Za-z@]+\*?", "", source_title))
+        rendered_words = words(rendered_title)
+        if source_words == rendered_words:
+            return True
+        if allow_macro and "\\" in source_title:
+            # 自定义宏展开后名称可不同；保留源码里的文字必须按原序出现。
+            remaining = iter(rendered_words)
+            return all(any(word == other for other in remaining) for word in source_words)
+        return False
+
+    def source_heading(label, title, level, unnumbered):
+        nonlocal source_position
+        sections = source_sections or []
+        for position in range(source_position, len(sections)):
+            entry = sections[position]
+            explicit = label is not None and label in entry["labels"]
+            allow_macro = position == source_position and not (unnumbered and entry["number"] is not None)
+            if explicit or (entry["level"] == level
+                            and title_matches(entry["title"], title, allow_macro)):
+                source_position = position + 1
+                return entry
+        return None
 
     def take_id():
         nonlocal pending_id
@@ -570,16 +596,48 @@ def inject_anchors(text: str) -> tuple[str, dict, dict]:
         head = _HEAD_ATTR.match(line)
         if head:
             level = len(head.group(1))
-            counters["sec"][level - 1] += 1
+            attrs = head.group(3) or ""
+            unnumbered = ".unnumbered" in attrs
+            if not unnumbered:
+                counters["sec"][level - 1] += 1
+                for k in range(level, 6):
+                    counters["sec"][k] = 0
             heads[level - 1] += 1
-            for k in range(level, 6):
-                counters["sec"][k] = 0
             parts = counters["sec"][:level]
             start = next((i for i, value in enumerate(parts) if value), 0)
             number = ".".join(str(c) for c in parts[start:])
-            label = head.group(3) or take_id()
+            id_match = _DIV_ID.search(attrs)
+            label = id_match[1] if id_match else take_id()
+            source_entry = (source_map or {}).get(label)
+            kind = "sec"
+            outline_entry = source_heading(label, head.group(2), level, unnumbered)
+            if outline_entry is not None:
+                kind = outline_entry["kind"]
+                if outline_entry["number"] is not None:
+                    number = outline_entry["number"]
+                else:
+                    parent = outline_entry["parent"]
+                    number = (parent + " · " if parent else "") + head.group(2)
+                    kind = "env"  # 无编号标题不冒充新的节号。
+            elif source_entry and source_entry[0] in ("sec", "app"):
+                kind, number = source_entry
+            elif unnumbered:
+                number = head.group(2)
+                kind = "env"
+            elif source_sections is not None:
+                # 未对齐标题保留可读位置，不能制造与原文不同的编号。
+                parent = next((numbered_ancestors[k][1] for k in sorted(numbered_ancestors, reverse=True)
+                               if k < level), "")
+                number = (parent + " · " if parent else "") + head.group(2)
+                kind = "env"
+                unmatched_heads += 1
+            for ancestor_level in list(numbered_ancestors):
+                if ancestor_level >= level:
+                    del numbered_ancestors[ancestor_level]
+            if kind in ("sec", "app"):
+                numbered_ancestors[level] = (kind, number)
             if label:
-                refmap[label] = ("sec", number)
+                refmap[label] = (kind, number)
             tag = "<!-- sec: " + number + (" id:" + label if label else "") + " -->"
             out.append(tag)
             out.append(head.group(1) + " " + head.group(2))
@@ -671,6 +729,7 @@ def inject_anchors(text: str) -> tuple[str, dict, dict]:
         "alg": counters["alg"],
         "env": counters["env"],
         "labels": len(refmap),
+        "unmatched_heads": unmatched_heads,
     }
     return "\n".join(out), stats, refmap
 
@@ -681,7 +740,7 @@ def inject_anchors(text: str) -> tuple[str, dict, dict]:
 
 KIND_PREFIX = {
     "eq": "eq. ", "fig": "Fig. ", "tbl": "Table ", "sec": "sec. ",
-    "env": "", "alg": "Algorithm ",
+    "app": "Appendix ", "env": "", "alg": "Algorithm ",
 }
 
 _REF_ANY = re.compile(r"\[(?:\\\[([^\]]+)\\\]|\[?([^\]]*?)\]?)\]\(#([^)]+)\)")
@@ -693,27 +752,39 @@ _BIB_TARGET = re.compile(r"^(?:bib|cite|ref)[.:]", re.I)
 def resolve_refs(text: str, refmap: dict, source_refmap: dict | None = None) -> tuple[str, dict]:
     """把 [\\[label\\]](#label) / [[1]](#bib.x) 之类改写成带编号的链接。
 
-    source_refmap 是 LaTeX 源码的兜底表（EX §7 第 2 条：没有 div id 的表格）。
+    源码提供章节、附录和表格编号；其它类型优先保留 pandoc 输出的编号。
     """
     stats = {"resolved": 0, "unresolved": 0, "bibliography": 0}
     unresolved: list[str] = []
     table = dict(refmap)
     if source_refmap:
         for key, value in source_refmap.items():
-            table.setdefault(key, value)
+            if value[0] in ("sec", "app", "tbl"):
+                table[key] = value
+            else:
+                table.setdefault(key, value)
 
     def repl(match):
         target = match.group(3)
         if _BIB_TARGET.match(target):
             stats["bibliography"] += 1
             return match.group(0)
-        keys = [k for k in target.split(",") if k in table]
-        if not keys:
+        keys = [key.strip() for key in target.split(",")]
+        missing = [key for key in keys if key not in table]
+        if missing:
             stats["unresolved"] += 1
-            unresolved.append(target)
-            return match.group(0)
-        stats["resolved"] += 1
-        label = ", ".join(KIND_PREFIX.get(table[k][0], "") + table[k][1] for k in keys)
+            unresolved.extend(missing)
+        else:
+            stats["resolved"] += 1
+
+        def display(key):
+            if key in table:
+                kind, number = table[key]
+                return KIND_PREFIX.get(kind, "") + number
+            kind = key.split(":", 1)[0]
+            return {"tab": "Table ?", "tbl": "Table ?", "fig": "Fig. ?",
+                    "sec": "section ?", "app": "Appendix ?", "eq": "eq. ?"}.get(kind, "reference ?")
+        label = ", ".join(display(key) for key in keys)
         return "[" + label + "](#" + target + ")"
 
     result = _REF_ANY.sub(repl, text)
@@ -722,9 +793,9 @@ def resolve_refs(text: str, refmap: dict, source_refmap: dict | None = None) -> 
 
 
 _SPAN_ATTR = re.compile(
-    r"\{(?=[^{}]*\b(?:reference-type|reference|acronym-label|acronym-form|"
+    r"\{(?=[^{}]*(?:reference-type|reference|acronym-label|acronym-form|"
     r"\.unnumbered|\.definition|\.example|\.theorem|\.lemma|\.proposition|"
-    r"\.corollary|\.remark|\.assumption|\.claim|\.proof)\b)[^{}]*\}"
+    r"\.corollary|\.remark|\.assumption|\.claim|\.proof|\.nocase|\.uri)\b)[^{}]*\}"
 )
 _RAW_ATTR = re.compile(r"\{=[A-Za-z]+\}")
 
@@ -752,26 +823,50 @@ _THM_ENV = {
     "theorem", "lemma", "proposition", "corollary", "definition",
     "assumption", "remark", "example", "claim",
 }
-_TOKEN_RE = re.compile(
-    r"\\label\{([^}]*)\}|\\begin\{([A-Za-z*]+)\}|\\end\{([A-Za-z*]+)\}"
-    r"|\\(part|chapter|section|subsection|subsubsection)\*?\{"
-)
 
 
-def source_refmap(tex_text: str) -> dict:
-    """从 LaTeX 源码按出现顺序建 label → (kind, number)（兜底用）。
+def _source_structure(tex_text: str) -> tuple[dict, list[dict]]:
+    """从展开的 LaTeX 源码建 label → (kind, number)。
 
-    对没有 div id 的表格（EX §7 第 2 条）：源码里的第 N 个 table 环境对应
-    输出里的第 N 个表格，因此按顺序对齐即可，不猜文本。
+    章节跳过星号形式，appendix 后按字母编号；表格从源码环境取号，
+    不依赖 pandoc 是否保留了 table div id。其它类型用于输出缺号时兜底。
     """
     refmap: dict[str, tuple[str, str]] = {}
     counters: dict[str, int] = {}
-    section = [0, 0, 0]
-    pending_section: str | None = None
+    section = [0] * 5
+    sections: list[dict] = []
+    pending_section = None
+    ancestors: dict[int, str] = {}
+    # article 默认编号到 subsubsection；book/report 默认到 subsection。
+    section_depth = 3
     stack: list[tuple[str, str] | None] = []
+    appendix = False
 
-    for match in _TOKEN_RE.finditer(tex_text):
-        label, begin, end, section_kind = match.groups()
+    for _, end_position, command in latex.commands(tex_text):
+        if command == "appendix":
+            appendix = True
+            section = [0] * 5
+            ancestors.clear()
+            pending_section = None
+            continue
+        section_kind = command.rstrip("*")
+        if section_kind not in {"part", "chapter", "section", "subsection", "subsubsection",
+                                "paragraph", "subparagraph"}:
+            section_kind = None
+        option = latex.argument(tex_text, end_position, "[", "]") if section_kind or command == "documentclass" else None
+        arg = latex.argument(tex_text, option[1] if option else end_position)
+        if arg is None:
+            continue
+        if command == "documentclass" and arg[0] in ("book", "report"):
+            section_depth = 2
+        if command == "setcounter" and arg[0] == "secnumdepth":
+            value = latex.argument(tex_text, arg[1])
+            if value and re.fullmatch(r"-?\d+", value[0].strip()):
+                section_depth = int(value[0])
+            continue
+        label = arg[0] if command == "label" else None
+        begin = arg[0] if command == "begin" else None
+        end = arg[0] if command == "end" else None
         if begin:
             kind = _ENV_KIND.get(begin)
             if kind is None and begin in _THM_ENV:
@@ -791,19 +886,47 @@ def source_refmap(tex_text: str) -> dict:
             continue
         if section_kind:
             level = {"part": 0, "chapter": 0, "section": 0,
-                     "subsection": 1, "subsubsection": 2}[section_kind]
-            section[level] += 1
-            for k in range(level + 1, 3):
-                section[k] = 0
-            pending_section = ".".join(str(c) for c in section[: level + 1])
+                     "subsection": 1, "subsubsection": 2, "paragraph": 3,
+                     "subparagraph": 4}[section_kind]
+            numbered = not command.endswith("*") and level < section_depth
+            number = None
+            if numbered:
+                section[level] += 1
+                for k in range(level + 1, len(section)):
+                    section[k] = 0
+                parts = [str(c) for c in section[: level + 1]]
+                if appendix:
+                    count, letters = section[0], ""
+                    while count:
+                        count, digit = divmod(count - 1, 26)
+                        letters = chr(65 + digit) + letters
+                    parts[0] = letters or "?"
+                number = ".".join(parts)
+            parent = next((ancestors[k] for k in sorted(ancestors, reverse=True) if k < level), "")
+            for ancestor_level in list(ancestors):
+                if ancestor_level >= level:
+                    del ancestors[ancestor_level]
+            if number is not None:
+                ancestors[level] = number
+            pending_section = {"title": arg[0], "level": level + 1, "number": number,
+                               "kind": "app" if appendix else "sec", "parent": parent,
+                               "labels": []}
+            sections.append(pending_section)
             continue
         if label:
-            if stack and stack[-1]:
-                refmap[label] = stack[-1]
-            elif pending_section:
-                refmap[label] = ("sec", pending_section)
-            pending_section = None
-    return refmap
+            active = next((frame for frame in reversed(stack) if frame), None)
+            if active:
+                refmap[label] = active
+            elif pending_section is not None:
+                pending_section["labels"].append(label)
+                if pending_section["number"] is not None:
+                    refmap[label] = (pending_section["kind"], pending_section["number"])
+    return refmap, sections
+
+
+def source_refmap(tex_text: str) -> dict:
+    """兼容只需引用表的调用者；编号与完整标题大纲共用一处计算。"""
+    return _source_structure(tex_text)[0]
 
 
 # --------------------------------------------------------------------------
@@ -818,8 +941,8 @@ def normalise_pandoc_output(
     text = raw.replace("\r\n", "\n")
     text, math_stats = normalise_math(text)
     text, figure_stats, figmap = normalise_figures(text, media_dir, fig_dir, pdftocairo)
-    text, anchor_stats, refmap = inject_anchors(text)
-    fallback = source_refmap(tex_text) if tex_text else {}
+    fallback, sections = _source_structure(latex.prepare(tex_text)) if tex_text else ({}, None)
+    text, anchor_stats, refmap = inject_anchors(text, fallback, sections)
     text, ref_stats = resolve_refs(text, refmap, fallback)
     text, polish_stats = polish(text)
     stats = {
@@ -835,7 +958,7 @@ def normalise_pandoc_output(
 
 def run_pandoc(
     source_file: str, out_media_dir: str, *, pandoc: str, reader: str = "latex",
-    bibliography: str | None = None, source_dir: str | None = None, timeout: int = 300,
+    bibliography: str | list[str] | None = None, source_dir: str | None = None, timeout: int = 300,
     diagnostics: list[str] | None = None,
 ) -> str:
     """调 pandoc 产出 Markdown 原文；reader 取 latex（路线 A）或 html（路线 B）。"""
@@ -845,7 +968,8 @@ def run_pandoc(
         "--extract-media=" + out_media_dir,
     ]
     if bibliography:
-        command += ["--citeproc", "--bibliography=" + os.path.basename(bibliography)]
+        files = [bibliography] if isinstance(bibliography, str) else bibliography
+        command += ["--citeproc"] + ["--bibliography=" + os.path.abspath(file) for file in files]
     try:
         proc = subprocess.run(
             command, cwd=source_dir or os.path.dirname(source_file),

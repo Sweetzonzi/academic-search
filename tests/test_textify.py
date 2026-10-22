@@ -214,7 +214,7 @@ def test_resolve_refs_uses_source_fallback():
 def test_resolve_refs_records_unresolved():
     text = r"[\[fig:missing\]](#fig:missing)"
     out, stats = textify.resolve_refs(text, {})
-    assert out == text
+    assert out == "[Fig. ?](#fig:missing)"
     assert stats["unresolved"] == 1
     assert stats["unresolved_targets"] == ["fig:missing"]
 

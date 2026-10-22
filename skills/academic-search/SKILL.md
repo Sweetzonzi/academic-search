@@ -72,12 +72,12 @@ scripts/run.cmd read --work <work_key> --refresh auto
 
 只对需要精读的候选调用，**不要对着候选列表逐篇 `read`**。`read` 自动复用正文缓存或转换已有原件，必要时才取件。返回的是 JSON 定位器，正文不在信封里：
 
-- `doc.path`：转换后 Markdown 的权威路径，位于 `bytes/`；文件名可能只有哈希、没有 `.md` 后缀，仍按 UTF-8 文本读取。
-- `doc.work_path`：可选的 `paper.md` 投影路径，方便人直接打开；正文内容与 `doc.path` 相同。
+- `doc.work_path`：人和 agent 默认读取的 `works/<proj>/paper.md`，同目录有 `figures/`，可直接使用正文中的相对图片引用；仅在投影可用时返回。
+- `doc.path`：`bytes/` 中的正文实体，与 `doc.work_path` 逐字节相同；投影不可用时才回退到它。文件名可能只有哈希、没有 `.md` 后缀，仍按 UTF-8 文本读取。
 - `anchors`：章节标签与行号，用于定位阅读范围。
 - `figures`：正文图片引用名到本地图件的映射。
 
-先检查 `warnings` 和来源版本，再用自己的文件工具读取正文。参数、缓存和失败行为按需查 [CLI 参考 §11](references/cli-reference.md#11-read)。
+先检查 `warnings` 和来源版本，再用自己的文件工具读取正文。使用本次返回的路径，目录名可能随元数据变化；长期标识论文用 `work_key`。正文和图件均只读，笔记另存。参数、缓存和失败行为按需查 [CLI 参考 §11](references/cli-reference.md#11-read)。
 
 ### 4.2 按问题分段阅读 Markdown
 
@@ -87,13 +87,15 @@ scripts/run.cmd read --work <work_key> --refresh auto
 
 ### 4.3 按映射查看图件
 
-在 Markdown 中遇到图片引用（如 `figures/fig-01.png`）时，按该引用名匹配 `figures[].ref`，用图像工具打开对应的 `figures[].path`。结合图注与正文解释坐标、曲线、实验条件和作者结论；图注不能替代对图像的查看。
+在 Markdown 中遇到图片引用（如 `figures/fig-01.png`）时，从 `doc.work_path` 的父目录按相对路径找到图件，用图像工具打开。结合图注与正文解释坐标、曲线、实验条件和作者结论；图注不能替代对图像的查看。
 
-`doc.path` 位于内容寻址的 `bytes/`，不能从它的父目录拼接相对图片路径；使用定位器给出的图件映射。`doc.work_path` 存在时，投影目录也可按 Markdown 相对引用找图。图件缺失或未渲染时说明限制，不声称已经看过图。
+回退到 `doc.path` 时，按正文引用名匹配 `figures[].ref`，打开对应的 `figures[].path`；不能从 `bytes/` 的父目录拼接相对图片路径。复杂表格可能以 HTML 保留合并单元格，读取时核对表头与数值对应关系。图件缺失或未渲染时说明限制，不声称已经看过图。
 
 ### 4.4 形成有依据的回答
 
 标明论文身份、来源版本及相关章节、公式或图号，区分论文原文、对图件的观察与自己的推断。源码生成的锚点表示章节位置，不等于 PDF 页码；行号只对应本次返回的 `doc.sha256`，正文变化后重新取定位器。证据与发表状态的通用要求见 §7。
+
+无编号段落的锚点会用所属章节与标题定位，不能把该定位文字当成论文节号；定位器用法见 [CLI 参考 §11](references/cli-reference.md#11-read)。
 
 ### 4.5 版本与转换缺损
 

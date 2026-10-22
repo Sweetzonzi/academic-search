@@ -56,7 +56,7 @@
 1. **Zotero 是「我的库」的权威，sidecar 是「领域语料 + 派生数据」的权威**，两者单向流动（promote），没有字段两处可改。「我的库」由 `LibraryBackend` 抽象，Zotero 只是默认实现（同学不装 Zotero 也能用）。**初版不接 Zotero**，「我的库」在 M5 之前是空的（[ADR-0032](docs/决策/ADR-0032.md)）。
 2. **全库没有任何随机生成的标识符**：一条记录的 id 由 `(来源, 来源内 id)` 确定性派生（`record_uid`），一篇作品的键就是组内最早那条记录的 `record_uid`（`work_key`）。两台机器看同一批来源会得到同样的 id 与同样的 `works/` 路径，删库重建后也完全一致。第三方 ID 只作别名——因为实测被合并/删除的 OpenAlex Work ID 返回 404 且没有跳转。见 [ADR-0003](docs/决策/ADR-0003.md)、[EX-2026-10-14-identity](docs/实验/EX-2026-10-14-身份与去重.md)。
 3. **同一篇论文的多个来源统统存下来，不做破坏性合并**：每条来源记录各占一行（`record`），由可重分组的 `work` 视图归为一篇；合并只是重定向（`merged_into`），永不改名、永不删记录。派生数据按源文本内容哈希共享，字节按 `sha256` 内容寻址。见 [ADR-0011](docs/决策/ADR-0011.md)。
-4. **全文按需取**：定时 run 只采集元数据；「要原件」用 `download`，「要读正文」用 `read`。产物落 `bytes/` + `works/`，不设收藏状态；正文与图件按同一转换清单绑定（[ADR-0035](docs/决策/ADR-0035.md)、[ADR-0074](docs/决策/ADR-0074.md)）。
+4. **全文按需取**：定时 run 只采集元数据；「要原件」用 `download`，「要读正文」用 `read`。人和 agent 均优先读返回的 `works/` 正文与同目录图件，回退规则见[定位器契约](docs/接口/输出载荷.md)。产物落 `bytes/` + `works/`，不设收藏状态；正文与图件按同一转换清单绑定（[ADR-0035](docs/决策/ADR-0035.md)、[ADR-0074](docs/决策/ADR-0074.md)）。
 5. **全文文本化走「原生文本优先」，且以 arXiv LaTeX 源码为主、HTML 为辅**：源码/HTML → pandoc → Markdown（图件随文落盘、章节锚点注入）。当前不解析本地 PDF 或出版社页面；源码中的 PDF 图可渲染成 PNG。注意 pandoc 的原始输出**不能直接用**，必须配一层归一化。实测见 [EX-2026-10-14-textify](docs/实验/EX-2026-10-14-文本化.md)。
 
 ---
@@ -72,7 +72,7 @@ academic-search/
 │  ├─ 05-验证与验收.md 06-待决事项.md 07-风险登记册.md 术语表.md
 │  ├─ 决策/（ADR-NNNN.md + 索引） 实验/（EX-*.md + 注册表）
 │  └─ 调研/ 运维/ 使用/ 开发/ 接口/  archive/
-├─ tools/                     # 维护工具（doc_check / selfcheck / test_doc_check / survey_spike）
+├─ tools/                     # 维护工具（doc_check / selfcheck / test_doc_check / survey_spike / install_skill）
 ├─ vendor/                    # 运行时依赖（便携 pandoc）；tools/ 只放维护脚本
 ├─ experiments/<里程碑>/       # 设计期实验：脚本与调研素材进版本库；样本、缓存与产物不进
 ├─ skills/academic-search/    # 交付物：SKILL.md + references/ + scripts/

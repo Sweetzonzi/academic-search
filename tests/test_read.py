@@ -239,6 +239,17 @@ def test_cached_body_survives_unlaunchable_pandoc(work, converter, monkeypatch):
     assert any("版本无法确认" in item for item in second["warnings"])
 
 
+def test_reader_revision_reconverts_local_source_offline(work, converter, monkeypatch):
+    raw(work)
+    first = read(work, refresh="false")
+    monkeypatch.setattr(paper, "READER_VERSION", "read@next")
+    client = Client()
+    second = read(work, refresh="false", client=client)
+    assert converter == ["latex", "latex"] and client.calls == []
+    assert second["doc"]["converter_version"].endswith("|read@next")
+    assert second["doc"]["sha256"] != first["doc"]["sha256"]
+
+
 def test_metadata_upgrade_only_marks_stale(work, converter):
     raw(work)
     read(work, refresh="false")

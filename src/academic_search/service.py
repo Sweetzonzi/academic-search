@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from . import config, envelope, group, htmlclean, identity, paper, paths, report, store, textify, venues
+from . import config, envelope, group, htmlclean, identity, latex, paper, paths, report, store, textify, venues
 from .sources import SearchSpec, SourceError, normalize_doi as source_normalize_doi
 from .sources import arxiv as arxiv_source
 from .sources import crossref as crossref_source
@@ -1319,8 +1319,15 @@ def _convert_latex(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str
     if info["kind"] == "pdf":
         raise textify.TextifyError("eprint_pdf_only", "e-print 只有 PDF，没有 LaTeX 源码")
     root_tex = textify.find_root_tex(source_dir, arxiv_id=arxiv_id)
-    with open(root_tex, "r", encoding="utf-8", errors="replace") as handle:
-        tex_text = handle.read()
+    try:
+        tex_text = latex.expand_inputs(root_tex, source_dir)
+        bibliography = latex.bibliographies(tex_text, root_tex, source_dir)
+        prepared = latex.prepare(tex_text)
+    except (OSError, ValueError) as exc:
+        raise textify.TextifyError("latex_prepare_failed", str(exc)) from exc
+    # 只改独立转换目录中的副本，原始源码包及其投影保持不变。
+    prepared_tex = Path(root_tex).with_name(".academic-search-read.tex")
+    prepared_tex.write_text(prepared, encoding="utf-8")
     media = str(base / "media")
     # 预置原始媒体。Windows pandoc 可能只重写路径却因 I/O 警告未复制文件。
     for name in textify.list_files(source_dir):
@@ -1336,8 +1343,8 @@ def _convert_latex(client, arxiv_id: str, base: Path, tool: str, pdftocairo: str
         shutil.copy2(file, destination)
     diagnostics = []
     raw = textify.run_pandoc(
-        root_tex, media, pandoc=tool, reader="latex",
-        bibliography=textify.find_bibliography(source_dir),
+        str(prepared_tex), media, pandoc=tool, reader="latex",
+        bibliography=bibliography,
         diagnostics=diagnostics,
     )
     markdown, stats = textify.normalise_pandoc_output(
