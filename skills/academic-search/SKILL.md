@@ -119,7 +119,7 @@ stdout 是 JSON 信封 `{ok, command, schema, data|error}`，日志走 stderr。
 - **列表少于预期**：读 `data.counts.local`；`truncated` 表示候选预算耗尽，`venue_filtered_out` 表示文本命中但载体不符，`matched` 与 `returned` 区分匹配数和展示数。`data.items` 查的是本地库，条数不等于本次新增数。
 - **部分源失败**：`counts.failures[]` 非空时仍可能 `ok=true`，使用成功结果并说明缺失来源；`search` / `sync` 的 `counts.complete` 表示本次规定的采集是否完成，细则见 CLI 参考 §8，不能把失败或跳过的来源报告成已完成检索。
 - **`warnings`**：`search` / `lookup` 可返回 `data.warnings` 字符串列表。阅读并向用户转述影响覆盖范围或结果判断的提示，与 `counts`、`degraded` 中的同一事实合并说明；没有该字段不代表检索完整。字段用法见 CLI 参考 §8。
-- **`degraded`**：读 `reason` 并结合 `network`、`cost.requests`；`sync` 看各 `runs[].refreshed`、状态与成本。新鲜度命中是正常复用，只需说明本次未刷新；额度不足可能整次跳过，也可能已经完成部分来源。不要统一说“只查本地”，也不要因该标记重复请求或绕过额度限制。
+- **`degraded`**：读 `reason` 并结合 `network`、`cost.requests`；`sync` 看各 `runs[].refreshed`、状态与成本。新鲜度命中是正常复用，只需说明本次未刷新；额度不足可能整次跳过，也可能已经完成部分来源。不要统一说“只查本地”，也不要因该标记重复请求或绕过额度限制。**报额度问题之前先确认本次请求有没有带 key**：`warnings` 里出现“本次 OpenAlex 请求没有带 key”时，凭据没到子进程与额度耗尽在 429 上长得一样，按[初始化参考 §3](references/setup.md#3-openalex-凭据)先补注入再判断。
 - **`ok=false`**：仅 `busy`、`source_error`、`network_error`、`rate_limited` 在原因允许恢复时最多重试一次；缺依赖、错误参数、写权限或网络策略拒绝先按[初始化参考 §5](references/setup.md#5-按失败阶段恢复)修原因，重复执行无用。错误码细节见 CLI 参考 §10。
 
 ## 7. 交付与证据
@@ -133,7 +133,7 @@ stdout 是 JSON 信封 `{ok, command, schema, data|error}`，日志走 stderr。
 
 ## 8. 环境要求与未接线
 
-- **运行前提**：Python `>=3.11`、可写存储；OpenAlex 凭据由执行进程的 `OPENALEX_API_KEY` 提供，arXiv 不需要 key。设置、自检与失败恢复统一见[初始化参考](references/setup.md)；不输出凭据值。
+- **运行前提**：Python `>=3.11`、可写存储；OpenAlex 凭据由执行进程的 `OPENALEX_API_KEY` 提供，arXiv 不需要 key。宿主起子进程时按变量名过滤 `KEY` / `PASSWORD` / `SECRET` / `TOKEN`，会让已配置的凭据在子进程里看起来“没配置”；`--diagnose` 的 `openalex_key` 与 `openalex_key_user_scope` 两行用来区分。设置、自检与失败恢复统一见[初始化参考](references/setup.md)；不输出凭据值。
 - **能力边界**：`search`、`lookup`、`download`、`read`、`sync`、`profile`、`verify`、`version` 已接线；`digest`、`export` / `bundle`、`promote`、`graph` 尚未接线，不能声称完成摘要缓存或导出。`read` 只转换 arXiv LaTeX 源码与 HTML，不解析本地 PDF 或出版社页面；初版不接 Zotero。
 - **转换依赖**：检索与原件下载无需 pandoc。转换链按 `ACADEMIC_SEARCH_PANDOC`（可执行文件）→ 仓库 `vendor/pandoc/pandoc.exe`（POSIX 为 `pandoc`）→ `PATH` 查找；可从 [pandoc 官方发布页](https://github.com/jgm/pandoc/releases/latest) 下载对应平台压缩包，解出可执行文件放入上述位置。HTML 另需 `lxml`；缺 pandoc 时仍可读取已有的完整正文缓存。
 

@@ -114,6 +114,7 @@ def test_installed_bundle_offline_initialization(launch):
     assert "database=not_checked" in diagnostic.stdout
     assert "network=not_checked" in diagnostic.stdout
     assert "openalex_key=present" in diagnostic.stdout
+    assert "openalex_key_user_scope=" in diagnostic.stdout
     assert "isolated-secret-do-not-print" not in diagnostic.stdout + diagnostic.stderr
     assert not (root / "data").exists()
     result = run("search", "--refresh", "false", "--limit", "1")
@@ -142,6 +143,21 @@ def test_diagnostic_failure_identifies_root_and_exposes_no_key(launch):
     assert "openalex_key=missing" in result.stdout
     assert "setup.md" in result.stderr
     assert not (root / "data").exists()
+
+
+def test_diagnostic_separates_process_key_from_user_scope(launch):
+    """进程里 missing 不等于没配置：本机用户级可能有同名变量。
+
+    宿主按变量名过滤 `KEY`/`PASSWORD`/`SECRET`/`TOKEN` 时正是这个形态——
+    `openalex_key=missing` + `openalex_key_user_scope=present`。
+    """
+    run, *_ = launch
+    diagnostic = run("--diagnose", OPENALEX_API_KEY=None)
+    assert diagnostic.returncode == 0, diagnostic.stderr
+    fields = dict(line.split("=", 1) for line in diagnostic.stdout.splitlines() if "=" in line)
+    assert fields["openalex_key"] == "missing"
+    # 只报存在性：取值域固定，任何真实值都不该出现在这一行。
+    assert fields["openalex_key_user_scope"] in {"present", "missing", "not_applicable"}
 
 
 def test_root_requires_value(launch):

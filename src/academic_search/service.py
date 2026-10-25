@@ -142,11 +142,28 @@ def _failure_warnings(failures: Sequence[dict]) -> list[str]:
     return ["来源请求失败（" + names + "），结果覆盖可能不完整；详情见 counts.failures。"]
 
 
+def _keyless_warning() -> str:
+    """无 key 请求的提示：把「凭据没到子进程」与「额度用完」分开。
+
+    匿名档的 429 与「用户没配 key」在响应上无法区分，只有这条事实能分开：
+    **本次请求确实没带 key**。宿主按变量名过滤 `KEY`/`PASSWORD`/`SECRET`/`TOKEN`
+    时，进程里看不到 key 而用户级已配置——那要先补注入，不是额度问题。
+    """
+    return ("本次 OpenAlex 请求没有带 key（匿名档额度按出口 IP 共享）；"
+            "若本机已配置 OPENALEX_API_KEY，说明注入没有到达子进程——"
+            "部分宿主按变量名过滤 KEY/PASSWORD/SECRET/TOKEN；"
+            "先按初始化参考 §3 在同一次执行里补注入，再判断 429 是否仍是额度问题。")
+
+
 def _search_warnings(spec: SearchSpec, collected: dict, local_stats: dict, *,
-                     skipped: set[str], venue_ids: Sequence[str]) -> list[str]:
+                     skipped: set[str], venue_ids: Sequence[str],
+                     keyless: bool = False) -> list[str]:
     """由本次执行事实生成展示提示；不改变采集账本或结构化判据。"""
     counts = collected["counts"]
     warnings: list[str] = []
+    # 放在最前：它决定后面「额度不足」该怎么读。
+    if keyless:
+        warnings.append(_keyless_warning())
     # by_source 只在进入采集循环后填充；可区分能力跳过与整次未采集。
     if "arxiv" in skipped and "arxiv" in counts.get("by_source", {}):
         missing, conditions = [], []
@@ -485,7 +502,7 @@ def collect_run(
             "run_id": run_id, "status": "ok", "refreshed": False, "counts": {},
             "cost": {"usd": 0.0, "basis": "跳过联网", "requests": 0}, "responses": [],
             "degraded": reason, "skip_reason": skip_reason, "quota_stopped": False,
-            "all_failed": False,
+            "all_failed": False, "keyless_openalex": False,
         }
 
     client = client or make_client()
@@ -504,6 +521,7 @@ def collect_run(
     dedup_blocked = 0
     wrote_anything = False
     quota_hit = False
+    keyless_openalex = False
     for source in sources:
         if source in skipped:
             by_source[source] = 0
@@ -514,6 +532,9 @@ def collect_run(
             by_source[source] = 0
             continue
         attempted.append(source)
+        # 记事实，不记猜测：这条腿接下来**真的**会发一条不带 key 的请求。
+        if source == "openalex" and _api_key() is None:
+            keyless_openalex = True
         try:
             records = _fetch(client, source, spec, sort=sort,
                              from_date=from_date, to_date=to_date,
@@ -567,6 +588,7 @@ def collect_run(
         "quota_stopped": quota_hit,
         "skip_reason": None,
         "all_failed": all_failed,
+        "keyless_openalex": keyless_openalex,
     }
 
 
@@ -659,6 +681,7 @@ def run_search(
         outcome.counts = counts
         outcome.warnings = _search_warnings(
             spec, collected, local_stats, skipped=skipped, venue_ids=venue_ids,
+            keyless=bool(collected.get("keyless_openalex")),
         )
         return outcome
     finally:

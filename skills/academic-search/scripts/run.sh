@@ -78,6 +78,8 @@ if [ -n "$DIAG" ]; then
     echo 'python=unavailable'
   fi
   if [ -n "${OPENALEX_API_KEY:-}" ]; then echo 'openalex_key=present'; else echo 'openalex_key=missing'; fi
+  # 本启动器不查询操作系统的凭据存储（POSIX 没有等价的用户级变量库），如实标 not_applicable。
+  echo 'openalex_key_user_scope=not_applicable'
   printf 'database=not_checked\nnetwork=not_checked\n'
   if [ "$ROOT_OK" = false ]; then echo 'stage=root_error'; bad_root; fi
   if [ -z "$PY" ]; then echo 'stage=python_error'; bad_python; fi

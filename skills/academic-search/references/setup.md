@@ -48,7 +48,16 @@ sh "$launcher" --diagnose && sh "$launcher" search --refresh false --limit 1
 
 CLI 只读当前进程的 `OPENALEX_API_KEY`；**不自动加载 `.env`，不读取 Windows 用户级或系统级变量，也不代为注册 key**。本地检索与 arXiv 不需要 key；OpenAlex 的鉴权和额度事实见 [OpenAlex 参考 §2](openalex-fields.md#2-计费与鉴权决定现在能不能用)。
 
-先用 `--diagnose` 看 `openalex_key=present|missing`，不打印值。`present` 只证明进程变量非空，不证明服务接受它，也不证明余额可用。优先使用宿主允许的 secret 注入。Windows 用户级变量已配置但当前进程缺失时，只有在宿主允许读取该凭据来源时，才可在**同一次执行**中条件补充：
+先用 `--diagnose` 看两行，两行都不打印值：`openalex_key=present|missing` 说的是**当前子进程**里有没有；`openalex_key_user_scope=present|missing|not_applicable` 说的是**当前 Windows 用户级注册表**里有没有同名变量（`run.sh` 恒为 `not_applicable`；`reg.exe` 不可用或 `HKCU\Environment` 读不到时也是——**读不到不等于没配置**）。两行要放在一起读：
+
+| 诊断组合 | 含义与下一步 |
+|---|---|
+| `openalex_key=present` | 进程里有值。只证明非空，不证明服务接受它，也不证明余额可用 |
+| `missing` + `user_scope=missing` | 本机确实没配置，按本节末尾引导用户配置 |
+| `missing` + `user_scope=present` | **配了，但注入没到达子进程**。宿主按变量名过滤 `KEY` / `PASSWORD` / `SECRET` / `TOKEN` 时就是这个形态；这不是“没配置”，也不是“额度用完”，按下一段当场补注入 |
+| `missing` + `not_applicable` | 本启动器不查、或读不到操作系统的凭据存储；只能由宿主注入，不能据此断言没配置 |
+
+第三行是可修的：优先用宿主允许的 secret 注入；Windows 用户级变量已配置但当前进程缺失时，只有在宿主允许读取该凭据来源时，才可在**同一次执行**中条件补充：
 
 ```powershell
 if (-not $env:OPENALEX_API_KEY) {
@@ -59,7 +68,7 @@ if (-not $env:OPENALEX_API_KEY) {
 # 接着设置第 2 节的路径并调用 launcher；不要输出变量值。
 ```
 
-读取不到时，只能说“当前执行身份下凭据不可见”。不要覆盖已注入的进程变量，也不要跨账户查找或用其他凭据来源绕过宿主过滤。远端或容器需由其宿主单独注入，不能读取本机用户级变量来解决。
+读取不到时，只能说“当前执行身份下凭据不可见”。不要覆盖已注入的进程变量；允许的补充只有上面那一种——本机用户级同名变量、同一次执行、不回显——除此之外不要跨账户查找，也不要换用别的凭据来源绕过宿主过滤。远端或容器需由其宿主单独注入，不能读取本机用户级变量来解决。
 
 用户尚未配置时，引导其按 [OpenAlex 官方鉴权说明](https://help.openalex.org/api/authentication/) 获取并通过宿主配置 key；凭据不写入技能、`root.txt`、命令参数或报告。官方说明允许基础匿名请求，但本项目实测匿名额度按出口 IP 共享，不能当成已配置 key 的等价替代。选择 arXiv 继续时需说明覆盖变化，尤其是被引、FWCI 或载体筛选无法由该源替代。
 
@@ -67,12 +76,12 @@ if (-not $env:OPENALEX_API_KEY) {
 
 | 检查层 | 操作 | 成功的证明范围 |
 |---|---|---|
-| 启动器 | `run.cmd --diagnose` / `sh run.sh --diagnose`，可前置 `--root <仓库>` | 路径指向代码仓库、解释器满足版本与模块要求；不打开数据库、不联网 |
+| 启动器 | `run.cmd --diagnose` / `sh run.sh --diagnose`，可前置 `--root <仓库>` | 路径指向代码仓库、解释器满足版本与模块要求、key 在进程里与在用户级注册表里各是否存在；不打开数据库、不联网 |
 | CLI | `version` | 代码能导入和输出信封；不证明存储可用 |
 | 本地库 | `search --refresh false --limit 1` | `ok=true`、退出码 0：数据库能打开和初始化；空库返回空列表也算成功；不证明网络可用 |
 | OpenAlex | 在已获准联网且有 key 时，执行下方强制刷新命令 | 检查实际请求、失败与降级信息，判断该来源是否完成；不证明另一来源可用 |
 
-`--diagnose` 是 launcher 专用入口，单独调用，不与子命令混用。stdout 是 `name=value` 文本，含解析后的 `root` / `data` 路径、`root_valid`、实际 `python`、Python / SQLite 版本、key 存在性；`database` 与 `network` 固定为 `not_checked`。`stage=launcher_ready` 退出 0，`root_error` 或 `python_error` 退出 1 并在 stderr 给修法；根与解释器同时有问题时先报根。它的输出不是 CLI JSON 信封。
+`--diagnose` 是 launcher 专用入口，单独调用，不与子命令混用。stdout 是 `name=value` 文本，含解析后的 `root` / `data` 路径、`root_valid`、实际 `python`、Python / SQLite 版本、`openalex_key` 与 `openalex_key_user_scope` 两行存在性；`database` 与 `network` 固定为 `not_checked`。两个 key 字段只出 `present` / `missing`（`user_scope` 另有 `not_applicable`），不含任何值。`stage=launcher_ready` 退出 0，`root_error` 或 `python_error` 退出 1 并在 stderr 给修法；根与解释器同时有问题时先报根。它的输出不是 CLI JSON 信封。
 
 最小 OpenAlex 联网验证（沿用已设置的解释器、仓库和凭据）：
 
@@ -89,11 +98,11 @@ if (-not $env:OPENALEX_API_KEY) {
 | 无 JSON、仓库路径错误 | 用 `--diagnose` 检查解析根；更新本机绑定或显式给 `--root`，保留原库与配置 |
 | 无合格 Python | 检查实际路径、版本、模块和执行权限；修复候选后重跑，不反复调用坏存根 |
 | `data_not_writable` | 对照诊断中的 `data` 与错误中的绝对路径，检查目录和库文件权限；按 §1 处理原仓库，重复同一命令无用 |
-| key 缺失 | 按 §3 处理注入；本地或 arXiv 可继续，需说明实际范围 |
+| key 缺失（`openalex_key=missing`） | 先读 `openalex_key_user_scope`：`present` 是注入没到达子进程，按 §3 当场补充后重试一次；`missing` 才是真没配置，按 §3 引导用户配置。本地或 arXiv 可继续，需说明实际范围 |
 | `WinError 10013`、明确的策略拒绝 | 可能来自沙箱、防火墙或其他网络策略；结合宿主权限确认，通过宿主授权机制允许目标访问后再试，换 key 不能解决 |
 | DNS、TLS、代理或超时错误 | 检查当前子进程的网络与代理环境；确定性配置问题先修复，暂时故障最多重试一次 |
 | HTTP 401 / 403 | 请求已到服务；查看授权错误原因，检查 key 有效性、激活和访问条件，不按断网处理或持续重试 |
-| HTTP 402 / 429、余额降级 | 检查额度与速率，按返回信息停止、等待或使用已有结果；不绕过额度限制 |
+| HTTP 402 / 429、余额降级 | **先确认本次请求有没有带 key**：信封 `warnings` 里出现“本次 OpenAlex 请求没有带 key”，就按上一行的修法先补凭据、再重试一次，不要把匿名档的 429 读成“用户没配 key”或“额度用完”。确认带了 key，才按额度与速率处理——依返回信息停止、等待或使用已有结果，不绕过额度限制 |
 | `busy` | 另一 run 占写锁，稍后最多重试一次；不删除数据库或锁相关文件 |
 
 网页搜索工具可用不证明 CLI 子进程可联网；两者可能使用不同执行环境。不能修改宿主全局安全设置来完成自检。权限不允许且无法获准时，报告已通过的层、失败层、错误与仍可用的范围；未执行的层标为未验证。

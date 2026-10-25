@@ -266,7 +266,7 @@ scripts/run.cmd sync --refresh false
 
 `data` 除 `items` 外：`network`（本次是否发过请求）、`cost`（`{usd, basis, requests}`，含失败请求）；`counts`（`search` 恒有，`lookup` 只在刷新时）——`counts.local` 是本地漏斗 `{considered, matched, returned, truncated, venue_filtered_out}`，用来解释「为什么返回条数少于 `--limit`」。`search` 进入采集流程时另有 `new_candidates` / `dedup_blocked` / `by_source` / `failures` / `complete`，即使全部来源被条件排除也保留这些字段，此时 `network=false`、`complete=false`。
 
-**`data.warnings`**：`search` / `lookup` 成功返回的可选字符串列表，没有提示时省略。包含来源因能力限制被实际跳过、候选预算截断、部分来源失败、额度停止或标题查询无法执行所请求刷新的人读说明；同类合并。正常离线、新鲜度复用或零结果本身不产生提示。机器判断继续使用 `counts` / `degraded`；本字段不进入账本或 `sync` 留档。触发条件的权威定义见仓库 `docs/接口/输出载荷.md` §2。例如：
+**`data.warnings`**：`search` / `lookup` 成功返回的可选字符串列表，没有提示时省略。包含来源因能力限制被实际跳过、候选预算截断、部分来源失败、额度停止、OpenAlex 请求未带 key 或标题查询无法执行所请求刷新的人读说明；同类合并。正常离线、新鲜度复用或零结果本身不产生提示。机器判断继续使用 `counts` / `degraded`；本字段不进入账本或 `sync` 留档。触发条件的权威定义见仓库 `docs/接口/输出载荷.md` §2。例如：
 
 ```json
 "warnings": ["arXiv 采集接口不提供被引次数，已因 --min-citations 条件跳过该源采集。"]

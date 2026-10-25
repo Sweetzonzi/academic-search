@@ -89,6 +89,21 @@ if defined PY (
   echo python=unavailable
 )
 if defined OPENALEX_API_KEY (echo openalex_key=present) else (echo openalex_key=missing)
+rem 用户级注册表是否另有同名变量：只报存在性，绝不回显值。进程里 missing 而这里是 present，
+rem 说明注入没到达子进程（宿主按变量名过滤 KEY/PASSWORD/SECRET/TOKEN 时就是这样），不是没配置。
+rem 连 HKCU\Environment 都读不到时如实标 not_applicable——“读不到”不能说成“没配置”。
+set "KEY_SCOPE=missing"
+reg query "HKCU\Environment" >nul 2>&1
+if errorlevel 1 goto key_scope_unknown
+reg query "HKCU\Environment" /v OPENALEX_API_KEY >nul 2>&1
+if not errorlevel 1 set "KEY_SCOPE=present"
+goto key_scope_report
+
+:key_scope_unknown
+set "KEY_SCOPE=not_applicable"
+
+:key_scope_report
+echo openalex_key_user_scope=%KEY_SCOPE%
 echo database=not_checked
 echo network=not_checked
 if "%ROOT_OK%"=="false" (

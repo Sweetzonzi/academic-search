@@ -1125,6 +1125,29 @@ def test_warnings_before_quota_stop_do_not_claim_source_capability_skip(root):
     assert "只查本地" in warnings[0] and "arXiv" not in warnings[0]
 
 
+def test_keyless_openalex_request_says_why_before_any_quota_claim(root, monkeypatch):
+    """没带 key 的请求要自证：否则 429 与「用户没配 key」在响应上无法区分。"""
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    client = FixtureClient()
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["attention"]), sources=["openalex"], refresh="true",
+        client=client,
+    )
+    assert client.urls and all("api_key=" not in url for url in client.urls)
+    warnings = outcome.payload()["warnings"]
+    assert len(warnings) == 1
+    assert "OPENALEX_API_KEY" in warnings[0] and "429" in warnings[0]
+    assert "匿名" in warnings[0] and "额度" in warnings[0]
+
+
+def test_key_present_produces_no_keyless_warning(root):
+    outcome = service.run_search(
+        root, SearchSpec(any_of=["attention"]), sources=["openalex"], refresh="true",
+        client=FixtureClient(),
+    )
+    assert "warnings" not in outcome.payload()
+
+
 def test_warnings_combine_source_skip_and_truncation_even_on_empty_page(root):
     for letter in "abc":
         _insert_work(root, "w" * 19 + letter, title="Warnings Probe",
