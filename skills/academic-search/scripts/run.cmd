@@ -1,6 +1,6 @@
 @echo off
 rem academic-search launcher (Windows)。契约见仓库 docs/接口/交付物-skill打包.md。
-rem 仓库根：--root 参数 → ACADEMIC_SEARCH_ROOT → 本 bundle 的 root.txt → 脚本往上三级（= 仓库根）。
+rem 仓库根：--root 参数 → ACADEMIC_SEARCH_ROOT → 本 bundle 的 root.txt → 解析链接后的脚本往上三级。
 rem 解释器：ACADEMIC_SEARCH_PYTHON → python → py；验证版本与核心模块。
 setlocal DisableDelayedExpansion
 set "HERE=%~dp0"
@@ -45,13 +45,6 @@ if not defined ROOT (
     set /p "ROOT=" < "%HERE%..\root.txt"
   )
 )
-if not defined ROOT set "ROOT=%HERE%..\..\.."
-for %%i in ("%ROOT%") do set "ROOT=%%~fi"
-set "ROOT_OK=false"
-if exist "%ROOT%\src\academic_search\__init__.py" set "ROOT_OK=true"
-if "%ROOT_OK%"=="false" if not defined DIAG goto bad_root
-set "ACADEMIC_SEARCH_ROOT=%ROOT%"
-
 set "PY="
 if defined ACADEMIC_SEARCH_PYTHON (
   call :probe "%ACADEMIC_SEARCH_PYTHON%"
@@ -72,6 +65,15 @@ if not defined PY (
     )
   )
 )
+if not defined ROOT if defined PY (
+  for /f "delims=" %%r in ('call "%PY%" -c "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parents[2])" "%HERE%."') do set "ROOT=%%r"
+)
+if not defined ROOT set "ROOT=%HERE%..\..\.."
+for %%i in ("%ROOT%") do set "ROOT=%%~fi"
+set "ROOT_OK=false"
+if exist "%ROOT%\src\academic_search\__init__.py" set "ROOT_OK=true"
+if "%ROOT_OK%"=="false" if not defined DIAG goto bad_root
+set "ACADEMIC_SEARCH_ROOT=%ROOT%"
 if defined DIAG goto diagnose
 if not defined PY goto bad_python
 if not defined PYTHONIOENCODING set "PYTHONIOENCODING=utf-8"

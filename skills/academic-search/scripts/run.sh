@@ -1,9 +1,9 @@
 #!/bin/sh
 # academic-search launcher (POSIX)。契约见仓库 docs/接口/交付物-skill打包.md。
-# 仓库根：--root 参数 → ACADEMIC_SEARCH_ROOT → 本 bundle 的 root.txt → 脚本往上三级（= 仓库根）。
+# 仓库根：--root 参数 → ACADEMIC_SEARCH_ROOT → 本 bundle 的 root.txt → 解析链接后的脚本往上三级。
 # 解释器：ACADEMIC_SEARCH_PYTHON → python3 → python；验证版本与核心模块。
 set -u
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+HERE=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd -P)
 ROOT=${ACADEMIC_SEARCH_ROOT:-}
 DIAG=
 # 函数内 shift 不改变主入口的参数；只解析子命令之前的选项。

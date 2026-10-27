@@ -16,7 +16,7 @@ CLI 的检索结果均来自本地库，联网负责刷新语料。每篇以 `wo
     skills/academic-search/scripts/run.cmd  <命令> [参数...]     # Windows
     skills/academic-search/scripts/run.sh   <命令> [参数...]     # POSIX
 
-- 上述路径用于仓库内调用；安装后的副本用该 skill 目录下的 `scripts/`，不要假定当前目录就是仓库根。参数与示例按需读 [CLI 参考](references/cli-reference.md) 对应命令小节。
+- 上述路径用于仓库内调用；安装后用该 skill 目录下的 `scripts/`，不要假定当前目录就是仓库根。参数与示例按需读 [CLI 参考](references/cli-reference.md) 对应命令小节。
 - **首次使用、环境变化或启动失败时先读 [初始化与排障](references/setup.md)**，按启动器诊断 → 本地库 → 所需来源联网分层验证。`--diagnose` 只检查本地启动前提；正常调用已验证的环境时直接执行任务。
 - 仓库根绑定、Python 和凭据注入见初始化参考；`--root` 是全局选项，放在子命令前：`--root <仓库路径> search ...`。根目录同时决定配置和缓存位置，切换时说明实际使用的库。
 - 显式写全 `--refresh auto|true|false`：通常用 `auto` 复用新鲜缓存，要求强制更新时用 `true`，仅查本地用 `false`。`search` 的 `auto` 按检索式新鲜度判断；`lookup` 的 `auto` 按标识是否已命中判断。对 DOI / arXiv ID，`true` 均先刷新再查本地。

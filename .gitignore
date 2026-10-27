@@ -3,6 +3,11 @@ data/
 bytes/
 works/
 
+# 本机生成的演示文件、报告与构建临时目录
+/output/
+/reports/
+/.ppt-build/
+
 # 用户配置：唯一不可重建（见 docs/使用/配置.md）——各人一份，不进版本库
 config/
 
@@ -15,7 +20,7 @@ experiments/*/*
 # 运行时依赖：便携 pandoc 等外部可执行文件（下载得到，不进版本库）
 vendor/
 
-# skill bundle：root.txt 是安装时写入的本机仓库路径（各机不同），不进版本库
+# skill bundle：root.txt 是复制安装时写入的本机仓库路径（各机不同），不进版本库
 skills/*/root.txt
 
 # Python

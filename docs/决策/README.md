@@ -80,7 +80,7 @@ title: "设计决策索引"
 | [ADR-0052](ADR-0052.md) | 数据源适配层 | 逐源映射进 IFACE-SOURCE；日期列改为 `published_at` + `updated_at`；规范 type 六值（硬排除 = paratext ∪ 黑名单）；work 级聚合逐列写死；批量补桥 | accepted |
 | [ADR-0053](ADR-0053.md) | 输出载荷与读取定位 | 载荷契约独立成 IFACE-PAYLOAD；`read` 改为定位器（bytes 路径 + 图件映射 + 锚点行号）；排序按 `published_at`，score 初版不写 | accepted |
 | [ADR-0054](ADR-0054.md) | 派生文本的通道与键 | `digest put` 改批量 JSON；kind 含粒度；新增译名表 `config/terms.toml` 并把 `glossary_version` 更名 `terms_version`；content_hash 细则写死 | accepted |
-| [ADR-0055](ADR-0055.md) | 运行留档与运行环境 | 留档合并为 `data/runs/<run_id>/`；宿主只装薄 bundle；`vendor/` 装 pandoc；回看 30 天；锁冲突即 `busy`；库内 UTC、报告本地时区 | accepted |
+| [ADR-0055](ADR-0055.md) | 运行留档与运行环境 | 留档合并为 `data/runs/<run_id>/`；宿主只装薄 bundle；`vendor/` 装 pandoc；回看 30 天；锁冲突即 `busy`；库内 UTC、报告本地时区 | partially superseded by ADR-0066, ADR-0075 |
 | [ADR-0056](ADR-0056.md) | 契约补口 | `sync` 的 `data` 是 `run.json` 真子集；三个检索命令都落候选池、`query_name` 匿名即 NULL；主 `.tex` 按 `\documentclass` 判定、PDF 图 `pdftocairo`→PyMuPDF 降级且渲染器进 `converter_version`；`digest put` 不收回传 hash；部分失败不改变退出码 | accepted |
 | [ADR-0057](ADR-0057.md) | 检索载荷的粒度 | 可溯源最小集与正文通道；摘要见 ADR-0058，本地分页见 ADR-0073 | partially superseded by ADR-0058, ADR-0073 |
 | [ADR-0058](ADR-0058.md) | 摘要按需带出 | `lookup` 固定带完整摘要；`search` 新增 `--abstract`（默认关闭）带截断版，长度由 `search.toml` 的 `abstract.chars` 控制；多来源摘要按「版本层级 → 文本保真度」两级取值 | partially superseded by ADR-0059, ADR-0062 |
@@ -100,4 +100,5 @@ title: "设计决策索引"
 | [ADR-0072](ADR-0072.md) | 作者白名单按 OR 匹配 | 任一作者满足即通过，远端按 OR 组合；同名查询的回溯完成判据同时匹配当前检索式 | accepted |
 | [ADR-0073](ADR-0073.md) | 本地结果分页 | `search` 按 offset / limit 分段展示已过滤排序的 work；偏移不进取数缓存身份，远端采集策略单独决策 | accepted |
 | [ADR-0074](ADR-0074.md) | 正文转换清单 | 同一清单绑定原件、正文与图件；本地物化、刷新优先级与缺损提示 | accepted |
+| [ADR-0075](ADR-0075.md) | 宿主技能链接安装 | 默认链接仓库薄 bundle；复制作为兼容选项，迁移备份并保护已有绑定 | accepted |
 

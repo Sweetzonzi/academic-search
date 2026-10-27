@@ -1,14 +1,31 @@
 # 初始化与排障
 
-首次使用、换机器或执行环境、安装副本更新后，以及启动或环境相关失败时读本文件。目标是让**当前执行 CLI 的子进程**拿到正确的仓库、解释器、凭据与权限。一次性检索无需画像。
+首次使用、换机器或执行环境、安装方式变化后，以及启动或环境相关失败时读本文件。目标是让**当前执行 CLI 的子进程**拿到正确的仓库、解释器、凭据与权限。一次性检索无需画像。
 
 ## 1. 安装与路径绑定
 
-保留一份完整代码仓库，把 `skills/academic-search/` 复制到宿主的 skill 目录。安装的是薄 bundle，代码和数据仍在仓库；更新技能时重新复制 `SKILL.md`、`references/` 和 `scripts/`，保留本机绑定。仓库内可直接跑 `tools/install_skill.py` 完成安装或更新：它只同步这三项，保留 `root.txt`，把被替换的副本备份到 `skills.backup/`，并支持 `--check` 只比差异、`--dest` 指定安装目录。
+保留一份完整代码仓库，由安装者的 agent 根据当前宿主的实际技能扫描位置选择安装目录，再在仓库根运行 `tools/install_skill.py --dest <安装目录>`。`--dest` 必填，值是包含 `academic-search` 这一层的完整技能目录，不是扫描根；安装器不识别宿主名称，也不猜默认目录。安装前按 §2 验证当前执行环境可用的 Python；下方解释器和安装路径均为占位示例，需替换。
 
-仓库根按 `--root` → `ACADEMIC_SEARCH_ROOT` → bundle 的 `root.txt` 第一行 → bundle 上两级目录解析。`--root <路径>` 或 `--root=<路径>` 必须在子命令前。仓库根须含 `src/academic_search/__init__.py`；它同时决定 `config/`、`data/`、`bytes/` 和 `works/` 的位置，**不是任意可写数据目录**。路径使用实际执行环境能访问的绝对路径；Windows 的盘符路径不能直接用于远端 Linux 容器。
+```powershell
+$env:PYTHONIOENCODING = 'utf-8'
+& 'D:\path\to\python.exe' tools\install_skill.py --dest 'C:\path\to\skills\academic-search'
+& 'D:\path\to\python.exe' tools\install_skill.py --dest 'C:\path\to\skills\academic-search' --check
+```
 
-仓库内调用可用默认位置。安装到别处时，在 bundle 的 `root.txt` 写一行仓库绝对路径（无引号），或在调用进程设置 `ACADEMIC_SEARCH_ROOT`。该文件只放路径，不放 key。复制到另一台机器后重新绑定。
+```sh
+/absolute/path/to/python3 tools/install_skill.py --dest /absolute/path/to/skills/academic-search
+/absolute/path/to/python3 tools/install_skill.py --dest /absolute/path/to/skills/academic-search --check
+```
+
+默认链接到仓库的 `skills/academic-search/`：Windows 使用目录联接（junction），POSIX 使用符号链接。技能文本、参考和 launcher 随仓库直接更新，无需重复安装；链接模式不生成 `root.txt`。已有安装项备份到扫描根的同级 `<扫描目录名>.backup/`，绑定到其他仓库时需显式加 `--allow-rebind`；创建链接失败会报错，不自动退回复制。
+
+同一 `--dest` 配合 `--check` 只查链接目标，配合 `--dry-run` 预览且不写入。链接是否被扫描、技能目录是否刷新需在当前宿主确认，不能把磁盘安装成功当成当前会话已经加载。
+
+不支持链接的宿主可显式选 `--mode copy`：只同步 `SKILL.md`、`references/`、`scripts/`，写入指向本仓库的 `root.txt`，更新时保留相同仓库的绑定并备份旧安装项。只有复制模式需要在仓库技能改动后重跑安装；检查时也要带 `--mode copy --check`。
+
+仓库根按 `--root` → `ACADEMIC_SEARCH_ROOT` → bundle 的 `root.txt` 第一行 → 解析链接后的 bundle 上两级目录解析。`--root <路径>` 或 `--root=<路径>` 必须在子命令前。仓库根须含 `src/academic_search/__init__.py`；它同时决定 `config/`、`data/`、`bytes/` 和 `works/` 的位置，**不是任意可写数据目录**。路径使用实际执行环境能访问的绝对路径；Windows 的盘符路径不能直接用于远端 Linux 容器。
+
+仓库内调用和链接安装可用默认位置。手工复制到别处时，在副本的 `root.txt` 写一行仓库绝对路径（无引号），或在调用进程设置 `ACADEMIC_SEARCH_ROOT`。该文件只放路径，不放 key。复制到另一台机器后重新绑定；移动仓库后重新安装链接。
 
 存储采用 SQLite WAL，离线检索也需要写 `data/`。目录受限时优先为现有仓库取得宿主允许的写权限；迁移到可写位置时保留 `config/`、`data/`、`bytes/` 和 `works/`。新 clone 或空目录不会带上现有配置与缓存，不要静默切库，也不要清空数据排障。
 
@@ -25,7 +42,7 @@ launcher 验证版本及模块后选用候选：Windows 为 `ACADEMIC_SEARCH_PYT
 以下示例的仓库、bundle 和解释器路径均需替换。`D:\anaconda3\python.exe` 只是一个本机示例，不是通用安装位置。
 
 ```powershell
-# 同一次执行；安装副本的入口用其 scripts/run.cmd 绝对路径。
+# 同一次执行；安装后的入口用其 scripts/run.cmd 绝对路径。
 $env:PYTHONIOENCODING = 'utf-8'
 $env:ACADEMIC_SEARCH_PYTHON = 'D:\anaconda3\python.exe'
 $env:ACADEMIC_SEARCH_ROOT = 'D:\path\to\academic-search'

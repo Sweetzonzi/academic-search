@@ -125,6 +125,31 @@ def test_installed_bundle_offline_initialization(launch):
     assert (root / "data/sidecar.db").is_file()
 
 
+def test_linked_bundle_resolves_physical_repository_without_binding(launch, monkeypatch):
+    """从仓库外的链接入口运行，不靠 root.txt 或环境变量猜仓库。"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("linked_installer", REPO / "tools/install_skill.py")
+    installer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(installer)
+    run, root, bundle, _, _, _, _ = launch
+    source = root / "skills/academic-search"
+    source.parent.mkdir()
+    bundle.rename(source)
+    (source / "root.txt").unlink()
+    monkeypatch.setattr(installer, "SOURCE", source)
+    installer.create_link(bundle)
+    diagnostic = run("--diagnose")
+    assert diagnostic.returncode == 0, diagnostic.stdout + diagnostic.stderr
+    assert "stage=launcher_ready" in diagnostic.stdout
+    assert "repo with spaces" in diagnostic.stdout
+    assert not (root / "data").exists()
+    result = run("search", "--refresh", "false", "--limit", "1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not json.loads(result.stdout)["data"]["network"]
+    assert (root / "data/sidecar.db").is_file()
+
+
 @pytest.mark.parametrize("equals", [False, True])
 def test_explicit_root_overrides_broken_environment_and_binding(launch, equals):
     run, root, bundle, _, shell_path, _, _ = launch
